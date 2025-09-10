@@ -1,14 +1,19 @@
 import { Vector2 } from './Vector2';
+import { WeaponType } from './Weapon';
 
 export class Bullet {
   public position: Vector2;
   private velocity: Vector2;
   public isEnemyBullet: boolean;
+  public playerWeaponType?: WeaponType;
+  public enemyOwnerId?: number;
 
-  constructor(position: Vector2, velocity: Vector2, isEnemyBullet: boolean = false) {
+  constructor(position: Vector2, velocity: Vector2, isEnemyBullet: boolean = false, playerWeaponType?: WeaponType, enemyOwnerId?: number) {
     this.position = position;
     this.velocity = velocity;
     this.isEnemyBullet = isEnemyBullet;
+    this.playerWeaponType = playerWeaponType;
+    this.enemyOwnerId = enemyOwnerId;
   }
 
   update(deltaTime: number) {

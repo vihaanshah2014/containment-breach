@@ -5,6 +5,7 @@ export class Player {
   public position: Vector2;
   public health: number = 3;
   public weapon: Weapon | null = null;
+  public shield: number = 0; // 0-100
   private shootCooldown: number = 0;
   private punchCooldown: number = 0;
 
@@ -13,18 +14,21 @@ export class Player {
     this.weapon = new Weapon(WeaponType.PISTOL); // Start with pistol
   }
 
-  update(deltaTime: number, keys: Set<string>, mouse: { x: number; y: number }, width: number, height: number) {
+  update(deltaTime: number, keys: Set<string>, mouse: { x: number; y: number }, width: number, height: number): boolean {
     const speed = 200; // pixels per second
     const movement = new Vector2(0, 0);
 
-    if (keys.has('w')) movement.y -= 1;
-    if (keys.has('s')) movement.y += 1;
-    if (keys.has('a')) movement.x -= 1;
-    if (keys.has('d')) movement.x += 1;
+    // Support WASD and Arrow Keys
+    if (keys.has('w') || keys.has('arrowup')) movement.y -= 1;
+    if (keys.has('s') || keys.has('arrowdown')) movement.y += 1;
+    if (keys.has('a') || keys.has('arrowleft')) movement.x -= 1;
+    if (keys.has('d') || keys.has('arrowright')) movement.x += 1;
 
+    let moved = false;
     if (movement.length() > 0) {
       movement.normalize();
       this.position = this.position.add(movement.multiply(speed * (deltaTime / 1000)));
+      moved = true;
     }
 
     // Keep player in bounds
@@ -45,6 +49,8 @@ export class Player {
     if (this.weapon && this.weapon.isBroken()) {
       this.weapon = null;
     }
+
+    return moved;
   }
 
   canShoot(): boolean {
@@ -88,7 +94,15 @@ export class Player {
   }
 
   takeDamage() {
-    this.health--;
+    if (this.shield > 0) {
+      this.shield = Math.max(0, this.shield - 25);
+    } else {
+      this.health--;
+    }
+  }
+
+  addShield(amount: number) {
+    this.shield = Math.min(100, this.shield + amount);
   }
 
   render(ctx: CanvasRenderingContext2D, mousePos: Vector2) {
@@ -102,6 +116,16 @@ export class Player {
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 2;
     ctx.stroke();
+
+    // Draw shield ring if any
+    if (this.shield > 0) {
+      const radius = 18 + (this.shield / 100) * 8; // safety gets bigger with more shield
+      ctx.strokeStyle = 'rgba(0, 200, 255, 0.7)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(this.position.x, this.position.y, radius, 0, Math.PI * 2);
+      ctx.stroke();
+    }
 
     // Draw weapon
     if (this.weapon) {

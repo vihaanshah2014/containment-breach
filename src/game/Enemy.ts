@@ -2,15 +2,23 @@ import { Vector2 } from './Vector2';
 import { Weapon, WeaponType } from './Weapon';
 
 export class Enemy {
+  public id: number;
   public position: Vector2;
   public weapon: Weapon | null = null;
+  public shield: number = 0;
+  public maxShield: number = 0;
   private speed: number;
   private shootCooldown: number = 0;
   private lastShotTime: number = 0;
 
-  constructor(x: number, y: number, weaponChance: number = 0.6) {
+  private static nextId = 1;
+
+  constructor(x: number, y: number, weaponChance: number = 0.6, shieldHits: number = 0) {
+    this.id = Enemy.nextId++;
     this.position = new Vector2(x, y);
     this.speed = 80 + Math.random() * 40; // Random speed between 80-120
+    this.shield = shieldHits;
+    this.maxShield = shieldHits;
     
     // Variable chance to have a weapon based on difficulty
     if (Math.random() < weaponChance) {
@@ -46,7 +54,8 @@ export class Enemy {
           result.bullets.push({
             position: bulletStart,
             velocity: spreadDirection.multiply(300),
-            isEnemyBullet: true
+            isEnemyBullet: true,
+            ownerId: this.id
           });
         }
         
@@ -69,11 +78,20 @@ export class Enemy {
   }
 
   render(ctx: CanvasRenderingContext2D, playerPosition: Vector2) {
-    // Draw enemy as a black square
+    // Draw enemy body
     ctx.fillStyle = '#000000';
     ctx.fillRect(this.position.x - 10, this.position.y - 10, 20, 20);
 
-    // Draw red outline
+    // Shield visual
+    if (this.shield > 0) {
+      ctx.strokeStyle = 'rgba(0, 200, 255, 0.8)';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(this.position.x, this.position.y, 16, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Red outline
     ctx.strokeStyle = '#ff0000';
     ctx.lineWidth = 2;
     ctx.strokeRect(this.position.x - 10, this.position.y - 10, 20, 20);

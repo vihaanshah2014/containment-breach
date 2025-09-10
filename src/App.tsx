@@ -3,7 +3,7 @@ import GameCanvas from './components/GameCanvas';
 
 function App() {
   return (
-    <div className="min-h-screen bg-black flex items-center justify-center">
+    <div className="h-screen w-screen bg-black flex items-start justify-center">
       <GameCanvas />
     </div>
   );

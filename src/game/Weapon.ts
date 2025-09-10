@@ -4,7 +4,8 @@ export enum WeaponType {
   PISTOL = 'pistol',
   RIFLE = 'rifle',
   SHOTGUN = 'shotgun',
-  KATANA = 'katana'
+  KATANA = 'katana',
+  SHURIKEN = 'shuriken'
 }
 
 export class Weapon {
@@ -25,6 +26,17 @@ export class Weapon {
     this.isThrowable = true;
 
     switch (type) {
+      case WeaponType.SHURIKEN:
+        this.ammo = 12;
+        this.maxAmmo = 12;
+        this.durability = 60;
+        this.maxDurability = 60;
+        this.damage = 1;
+        this.fireRate = 200;
+        this.range = 450;
+        this.spread = 0;
+        this.bulletsPerShot = 0; // Uses thrown projectile, not bullets
+        break;
       case WeaponType.PISTOL:
         this.ammo = 8;
         this.maxAmmo = 8;
@@ -98,9 +110,10 @@ export class Weapon {
     const alpha = Math.max(0.3, durabilityPercent);
     
     switch (this.type) {
-      case WeaponType.PISTOL: return `rgba(102, 102, 102, ${alpha})`;
-      case WeaponType.RIFLE: return `rgba(51, 51, 51, ${alpha})`;
-      case WeaponType.SHOTGUN: return `rgba(68, 68, 68, ${alpha})`;
+      case WeaponType.SHURIKEN: return `rgba(80, 80, 80, ${alpha})`; // dark gray, not blue
+      case WeaponType.PISTOL: return `rgba(160, 160, 160, ${alpha})`; // light gray
+      case WeaponType.RIFLE: return `rgba(46, 139, 87, ${alpha})`; // sea green
+      case WeaponType.SHOTGUN: return `rgba(139, 69, 19, ${alpha})`; // saddle brown
       case WeaponType.KATANA: return `rgba(255, 0, 0, ${alpha})`;
       default: return `rgba(0, 0, 0, ${alpha})`;
     }
@@ -120,22 +133,45 @@ export class Weapon {
     }
     
     switch (this.type) {
-      case WeaponType.PISTOL:
-        ctx.fillRect(-15, -3, 30, 6);
-        ctx.fillRect(10, -5, 8, 10);
+      case WeaponType.SHURIKEN: {
+        // 4-point star, slightly larger for visibility
+        ctx.beginPath();
+        ctx.moveTo(0, -9);
+        ctx.lineTo(2, -2);
+        ctx.lineTo(9, 0);
+        ctx.lineTo(2, 2);
+        ctx.lineTo(0, 9);
+        ctx.lineTo(-2, 2);
+        ctx.lineTo(-9, 0);
+        ctx.lineTo(-2, -2);
+        ctx.closePath();
+        ctx.fill();
         break;
-      case WeaponType.RIFLE:
-        ctx.fillRect(-25, -2, 50, 4);
-        ctx.fillRect(20, -4, 8, 8);
+      }
+      case WeaponType.PISTOL: {
+        // Compact body + grip
+        ctx.fillRect(-12, -3, 24, 6);
+        ctx.fillRect(4, -6, 6, 12);
         break;
-      case WeaponType.SHOTGUN:
-        ctx.fillRect(-20, -4, 40, 8);
-        ctx.fillRect(15, -6, 10, 12);
+      }
+      case WeaponType.RIFLE: {
+        // Long barrel + mag
+        ctx.fillRect(-28, -2, 56, 4);
+        ctx.fillRect(6, -8, 6, 16); // mag
+        ctx.fillRect(-22, -3, 10, 6); // stock
         break;
-      case WeaponType.KATANA:
+      }
+      case WeaponType.SHOTGUN: {
+        // Thick barrel + pump
+        ctx.fillRect(-24, -4, 48, 8);
+        ctx.fillRect(2, -6, 14, 12); // pump/forend
+        break;
+      }
+      case WeaponType.KATANA: {
         ctx.fillRect(-30, -1, 60, 2);
         ctx.fillRect(-35, -3, 8, 6);
         break;
+      }
     }
     
     ctx.restore();

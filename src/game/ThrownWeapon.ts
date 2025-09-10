@@ -7,11 +7,13 @@ export class ThrownWeapon {
   public weapon: Weapon;
   private rotation: number = 0;
   private rotationSpeed: number;
+  public ownerIsPlayer: boolean = false;
 
-  constructor(position: Vector2, velocity: Vector2, weapon: Weapon) {
+  constructor(position: Vector2, velocity: Vector2, weapon: Weapon, ownerIsPlayer: boolean = false) {
     this.position = position;
     this.velocity = velocity;
     this.weapon = weapon;
+    this.ownerIsPlayer = ownerIsPlayer;
     this.rotationSpeed = (Math.random() - 0.5) * 20; // Random spin
   }
 
