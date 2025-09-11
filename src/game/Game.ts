@@ -7,6 +7,7 @@ import { WeaponPickup } from './WeaponPickup';
 import { ShieldPickup } from './ShieldPickup';
 import { ThrownWeapon } from './ThrownWeapon';
 import { Weapon, WeaponType } from './Weapon';
+import { TileMap } from './TileMap';
 
 export class Game {
   private width: number;
@@ -18,16 +19,28 @@ export class Game {
   private weaponPickups: WeaponPickup[] = [];
   private thrownWeapons: ThrownWeapon[] = [];
   private shieldPickups: ShieldPickup[] = [];
+  private map: TileMap;
   private score: number = 0;
   private timeScale: number = 1;
   private enemySpawnTimer: number = 0;
-  private enemySpawnRate: number = 2000; // ms
+  private enemySpawnRate: number = 1600; // ms (slightly faster for more action)
   private difficultyTimer: number = 0;
   private baseSpawnRate: number = 2000;
   private weaponSpawnTimer: number = 0;
   private waveNumber: number = 1;
   private enemiesKilledThisWave: number = 0;
-  private enemiesPerWave: number = 5;
+  private enemiesPerWave: number = 7;
+  private cameraX: number = 0;
+  private cameraY: number = 0;
+  // Minimap config
+  private miniW: number = 200;
+  private miniMargin: number = 12;
+  // Nav grid (BFS from player)
+  private navGrid: number[][] | null = null;
+  private navCols: number = 0;
+  private navRows: number = 0;
+  private navRecalcTimer: number = 0;
+  private lastPlayerTile: { tx: number; ty: number } | null = null;
   // Katana swing state
   private meleeSwingActive: boolean = false;
   private meleeSwingStart: number = 0; // radians (unwrapped)
@@ -60,6 +73,27 @@ export class Game {
     };
   }
 
+  // Character sprites
+  private playableSprites: any[] = [];
+  private enemySprites: any[] = [];
+  private unlockableSprites: any[] = [];
+
+  public setCharacterSprites(sets: { playable: any[]; enemies: any[]; unlockable: any[] }) {
+    this.playableSprites = sets.playable;
+    this.enemySprites = sets.enemies;
+    this.unlockableSprites = sets.unlockable;
+    if (this.playableSprites.length) {
+      const __idx = Math.floor(Math.random() * this.playableSprites.length);
+      (this.player as any).sprite = this.playableSprites[__idx];
+    }
+  }
+
+  public selectPlayerSprite(index: number) {
+    if (index >= 0 && index < this.playableSprites.length) {
+      (this.player as any).sprite = this.playableSprites[index];
+    }
+  }
+
   public onScoreUpdate?: (score: number) => void;
   public onHealthUpdate?: (health: number) => void;
   public onGameOver?: () => void;
@@ -69,7 +103,21 @@ export class Game {
   constructor(width: number, height: number) {
     this.width = width;
     this.height = height;
-    this.player = new Player(width / 2, height / 2);
+    const worldW = Math.max(1600, Math.floor(width * 2.5));
+    const worldH = Math.max(1200, Math.floor(height * 2.5));
+    this.map = new TileMap(worldW, worldH);
+    
+    // Spawn player on a door tile (the ones with white tech dots)
+    let px = worldW / 2;
+    let py = worldH / 2;
+    const doorTile = this.map.getRandomDoorTile();
+    if (doorTile) {
+      const c = this.map.tileCenter(doorTile.tx, doorTile.ty);
+      px = c.x; 
+      py = c.y;
+    }
+    
+    this.player = new Player(px, py);
   }
 
   resize(width: number, height: number) {
@@ -78,6 +126,7 @@ export class Game {
     // Clamp player within new bounds
     this.player.position.x = Math.max(20, Math.min(this.width - 20, this.player.position.x));
     this.player.position.y = Math.max(20, Math.min(this.height - 20, this.player.position.y));
+    // keep world size fixed; do not resize map here
   }
 
   update(deltaTime: number, keys: Set<string>, mouse: { x: number; y: number; clicked: boolean; rightClicked: boolean }) {
@@ -92,17 +141,27 @@ export class Game {
     // Update player
     // Track current aim direction toward mouse for blocking logic
     {
-      const aim = new Vector2(mouse.x - this.player.position.x, mouse.y - this.player.position.y);
+      const worldMouse = new Vector2(mouse.x + this.cameraX, mouse.y + this.cameraY);
+      const aim = new Vector2(worldMouse.x - this.player.position.x, worldMouse.y - this.player.position.y);
       this.aimDirection = aim.length() > 0 ? aim.normalize() : new Vector2(1, 0);
     }
 
-    const moved = this.player.update(scaledDeltaTime, keys, mouse, this.width, this.height);
+    const moved = this.player.update(
+      scaledDeltaTime,
+      keys,
+      { x: mouse.x + this.cameraX, y: mouse.y + this.cameraY },
+      this.map.getPixelWidth(),
+      this.map.getPixelHeight(),
+      (from, to, radius) => this.map.collideCircle(from, to, radius)
+    );
     if (moved) this.onHudUpdate?.();
 
     // Shooting or punching
     if (mouse.clicked) {
       if (this.player.weapon && this.player.canShoot()) {
-        const direction = new Vector2(mouse.x - this.player.position.x, mouse.y - this.player.position.y).normalize();
+        const worldMouseX = mouse.x + this.cameraX;
+        const worldMouseY = mouse.y + this.cameraY;
+        const direction = new Vector2(worldMouseX - this.player.position.x, worldMouseY - this.player.position.y).normalize();
         const bulletStart = this.player.position.add(direction.multiply(20));
         
         // Handle different weapon types
@@ -165,7 +224,9 @@ export class Game {
     if (mouse.rightClicked && this.player.weapon) {
       const thrownWeapon = this.player.throwWeapon();
       if (thrownWeapon) {
-        const direction = new Vector2(mouse.x - this.player.position.x, mouse.y - this.player.position.y).normalize();
+        const worldMouseX = mouse.x + this.cameraX;
+        const worldMouseY = mouse.y + this.cameraY;
+        const direction = new Vector2(worldMouseX - this.player.position.x, worldMouseY - this.player.position.y).normalize();
         this.thrownWeapons.push(new ThrownWeapon(
           this.player.position.add(direction.multiply(25)),
           direction.multiply(400),
@@ -176,27 +237,147 @@ export class Game {
       }
     }
 
-    // Update bullets
+    // Update bullets and collide with tiles and objects
     this.bullets = this.bullets.filter(bullet => {
       bullet.update(scaledDeltaTime);
-      return bullet.position.x > 0 && bullet.position.x < this.width &&
-             bullet.position.y > 0 && bullet.position.y < this.height;
+      
+      // Check collision with breakable objects first
+      const objectHit = this.map.checkObjectHit(bullet.position.x, bullet.position.y);
+      if (objectHit.hit && objectHit.object) {
+        const result = this.map.damageObject(objectHit.object.id, 1);
+        
+        // Create destruction particles
+        const particleColor = result.destroyed ? '#ffaa00' : '#888888';
+        const particleCount = result.destroyed ? 8 : 4;
+        
+        for (let k = 0; k < particleCount; k++) {
+          this.particles.push(new Particle(
+            bullet.position.x,
+            bullet.position.y,
+            Math.random() * 360,
+            80 + Math.random() * 120,
+            particleColor
+          ));
+        }
+        
+        return false; // Remove bullet
+      }
+      
+      // Check collision with tiles
+      const hit = this.map.bulletHit(bullet.position.x, bullet.position.y);
+      if (hit.hit) {
+        if (hit.material === 'glass' && hit.tx !== undefined && hit.ty !== undefined) {
+          this.map.breakGlass(hit.tx, hit.ty);
+          for (let k = 0; k < 6; k++) {
+            this.particles.push(new Particle(
+              bullet.position.x,
+              bullet.position.y,
+              Math.random() * 360,
+              80 + Math.random() * 120,
+              '#a6f6ff'
+            ));
+          }
+        }
+        return false;
+      }
+      
+      return bullet.position.x > 0 && bullet.position.x < this.map.getPixelWidth() &&
+             bullet.position.y > 0 && bullet.position.y < this.map.getPixelHeight();
     });
 
-    // Update enemies
+    // Update enemies with improved navigation and LOS-aware firing
+    const tileSize = (this.map as any).tileSize as number;
+    const lineOfSight = (sx: number, sy: number, ex: number, ey: number) => {
+      const steps = Math.max(1, Math.floor(Math.hypot(ex - sx, ey - sy) / (tileSize / 2)));
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const x = sx + (ex - sx) * t;
+        const y = sy + (ey - sy) * t;
+        const tx = Math.floor(x / tileSize);
+        const ty = Math.floor(y / tileSize);
+        const tt = (this.map as any).get(tx, ty);
+        if (tt === 'wall' || tt === 'glass') return false;
+      }
+      return true;
+    };
+
+    // Track player's current room index (for HUD/AI consumers)
+    {
+      const __room = this.map.getRoomContaining(this.player.position.x, this.player.position.y);
+      const __rooms: any[] = (this.map as any).getRooms ? (this.map as any).getRooms() : [];
+      (this.player as any).currentRoomIndex = __room ? __rooms.indexOf(__room) : null;
+    }
+
     this.enemies.forEach(enemy => {
-      const result = enemy.update(scaledDeltaTime, this.player.position);
+      const epos = enemy['position'];
+      const ppos = this.player.position;
+      const los = lineOfSight(epos.x, epos.y, ppos.x, ppos.y);
+      let moveTarget = ppos;
+
+      if (!los) {
+        const playerRoom = this.map.getRoomContaining(ppos.x, ppos.y);
+        const enemyRoom = this.map.getRoomContaining(epos.x, epos.y);
+        const rooms: any[] = (this.map as any).getRooms ? (this.map as any).getRooms() : [];
+        (this.player as any).currentRoomIndex = playerRoom ? rooms.indexOf(playerRoom) : null;
+
+        const eTile = this.map.worldToTile(epos.x, epos.y);
+        if (playerRoom && enemyRoom && playerRoom !== enemyRoom) {
+          // Head toward the closest door of the player's room
+          const doorTile = this.findClosestDoorTile(playerRoom, eTile);
+          if (doorTile) {
+            const nextStep = this.findNextStep(eTile.tx, eTile.ty, doorTile.tx, doorTile.ty);
+            if (nextStep) {
+              const c = this.map.tileCenter(nextStep.tx, nextStep.ty);
+              moveTarget = new Vector2(c.x, c.y);
+            } else {
+              // Nudge directly toward the door if BFS fails
+              const c = this.map.tileCenter(doorTile.tx, doorTile.ty);
+              moveTarget = new Vector2(c.x, c.y);
+            }
+          } else {
+            // Fallback: room center
+            const roomCenter = this.map.getRoomCenter(playerRoom);
+            const targetTile = this.map.worldToTile(roomCenter.x, roomCenter.y);
+            const nextStep = this.findNextStep(eTile.tx, eTile.ty, targetTile.tx, targetTile.ty);
+            if (nextStep) {
+              const c = this.map.tileCenter(nextStep.tx, nextStep.ty);
+              moveTarget = new Vector2(c.x, c.y);
+            } else {
+              moveTarget = epos;
+            }
+          }
+        } else {
+          // Same room or unknown: head straight to player via BFS
+          const pTile = this.map.worldToTile(ppos.x, ppos.y);
+          const nextStep = this.findNextStep(eTile.tx, eTile.ty, pTile.tx, pTile.ty);
+          if (nextStep) {
+            const c = this.map.tileCenter(nextStep.tx, nextStep.ty);
+            moveTarget = new Vector2(c.x, c.y);
+          } else {
+            const nearbyEmpty = this.findNearbyEmptyTile(epos);
+            moveTarget = nearbyEmpty || epos;
+          }
+        }
+      }
+
+      const result = enemy.update(
+        scaledDeltaTime,
+        moveTarget,
+        (from: Vector2, to: Vector2, radius: number) => this.map.collideCircle(from, to, radius)
+      );
       
-      // Add enemy bullets
-      result.bullets.forEach(bulletData => {
-        this.bullets.push(new Bullet(
-          bulletData.position,
-          bulletData.velocity,
-          bulletData.isEnemyBullet,
-          undefined,
-          (bulletData as any).ownerId
-        ));
-      });
+      // Add enemy bullets only when LOS is clear to player
+      if (los) {
+        result.bullets.forEach(bulletData => {
+          this.bullets.push(new Bullet(
+            bulletData.position,
+            bulletData.velocity,
+            bulletData.isEnemyBullet,
+            undefined,
+            (bulletData as any).ownerId
+          ));
+        });
+      }
       
       // Add thrown weapons from enemies
       if (result.thrownWeapon) {
@@ -221,8 +402,12 @@ export class Game {
     // Update thrown weapons
     this.thrownWeapons = this.thrownWeapons.filter(thrownWeapon => {
       thrownWeapon.update(scaledDeltaTime);
-      return thrownWeapon.position.x > -50 && thrownWeapon.position.x < this.width + 50 &&
-             thrownWeapon.position.y > -50 && thrownWeapon.position.y < this.height + 50;
+      return (
+        thrownWeapon.position.x > -50 &&
+        thrownWeapon.position.x < this.map.getPixelWidth() + 50 &&
+        thrownWeapon.position.y > -50 &&
+        thrownWeapon.position.y < this.map.getPixelHeight() + 50
+      );
     });
 
     // Update particles
@@ -260,6 +445,9 @@ export class Game {
 
     // Update callbacks
     this.onHealthUpdate?.(this.player.health);
+    // Update camera follow
+    this.cameraX = Math.max(0, Math.min(this.map.getPixelWidth() - this.width, this.player.position.x - this.width / 2));
+    this.cameraY = Math.max(0, Math.min(this.map.getPixelHeight() - this.height, this.player.position.y - this.height / 2));
   }
 
   private nextWave() {
@@ -364,51 +552,91 @@ export class Game {
   }
 
   private spawnEnemy() {
-    const side = Math.floor(Math.random() * 4);
-    let x, y;
-
-    switch (side) {
-      case 0: // Top
-        x = Math.random() * this.width;
-        y = -20;
-        break;
-      case 1: // Right
-        x = this.width + 20;
-        y = Math.random() * this.height;
-        break;
-      case 2: // Bottom
-        x = Math.random() * this.width;
-        y = this.height + 20;
-        break;
-      case 3: // Left
-        x = -20;
-        y = Math.random() * this.height;
-        break;
-      default:
-        x = 0;
-        y = 0;
+    // Bias spawns toward rooms nearer to the player for more encounters
+    const rooms: any[] = (this.map as any).getRooms ? (this.map as any).getRooms() : [];
+    let tile: { tx: number; ty: number } | null = null;
+    if (rooms.length) {
+      const ppos = this.player.position;
+      // Sort rooms by distance to player center
+      const ranked = rooms
+        .map((r, idx) => ({ idx, cx: (r.x + r.w / 2) * (this.map as any).tileSize, cy: (r.y + r.h / 2) * (this.map as any).tileSize }))
+        .map(r => ({ ...r, d2: (r.cx - ppos.x) * (r.cx - ppos.x) + (r.cy - ppos.y) * (r.cy - ppos.y) }))
+        .sort((a, b) => a.d2 - b.d2);
+      // Pick from nearest few rooms but avoid the player's current room most of the time
+      const playerRoom = this.map.getRoomContaining(ppos.x, ppos.y);
+      const playerRoomIndex = playerRoom ? rooms.indexOf(playerRoom) : -1;
+      const candidates = ranked.filter(r => r.idx !== playerRoomIndex).slice(0, Math.min(4, ranked.length));
+      const pick = (candidates.length && Math.random() < 0.7) ? candidates[Math.floor(Math.random() * candidates.length)] : ranked[Math.floor(Math.random() * Math.min(rooms.length, 6))];
+      if (pick) {
+        tile = this.map.getRandomEmptyTileInRoom(pick.idx);
+      }
     }
+    // Fallback to uniform random
+    if (!tile) {
+      let roomIndex = this.map.getRandomRoomIndex();
+      if (roomIndex === null) return;
+      tile = this.map.getRandomEmptyTileInRoom(roomIndex);
+    }
+    if (!tile) tile = this.map.getRandomEmptyTile(false);
+    if (!tile) return;
+    const { x, y } = this.map.tileCenter(tile.tx, tile.ty);
 
     // Increase weapon chance with wave number
     const weaponChance = Math.min(0.9, 0.4 + (this.waveNumber * 0.1));
     const shieldChance = Math.min(0.5, 0.1 + (this.waveNumber * 0.05));
     const shieldHits = Math.random() < shieldChance ? 2 : 0;
-    this.enemies.push(new Enemy(x, y, weaponChance, shieldHits));
+    const e = new Enemy(x, y, weaponChance, shieldHits);
+    // Assign a random enemy sprite if available
+    if (this.enemySprites.length) {
+      e.sprite = this.enemySprites[Math.floor(Math.random() * this.enemySprites.length)];
+    }
+    this.enemies.push(e);
   }
 
   private spawnWeaponPickup() {
     const weaponTypes = [WeaponType.PISTOL, WeaponType.RIFLE, WeaponType.SHOTGUN, WeaponType.KATANA, WeaponType.SHURIKEN];
     const randomType = weaponTypes[Math.floor(Math.random() * weaponTypes.length)];
     
-    const x = 100 + Math.random() * (this.width - 200);
-    const y = 100 + Math.random() * (this.height - 200);
+    // Spawn near a random door tile (white doorway)
+    const doorTile = this.map.getRandomDoorTile();
+    let x = this.map.getPixelWidth() / 2;
+    let y = this.map.getPixelHeight() / 2;
+    
+    if (doorTile) {
+      const center = this.map.tileCenter(doorTile.tx, doorTile.ty);
+      // Spawn slightly offset from the door center
+      const offsetDistance = 30 + Math.random() * 40; // 30-70 pixels away
+      const offsetAngle = Math.random() * Math.PI * 2;
+      x = center.x + Math.cos(offsetAngle) * offsetDistance;
+      y = center.y + Math.sin(offsetAngle) * offsetDistance;
+      
+      // Ensure it's within world bounds
+      x = Math.max(50, Math.min(this.map.getPixelWidth() - 50, x));
+      y = Math.max(50, Math.min(this.map.getPixelHeight() - 50, y));
+    }
     
     this.weaponPickups.push(new WeaponPickup(x, y, randomType));
   }
 
   private spawnShieldPickup() {
-    const x = 100 + Math.random() * (this.width - 200);
-    const y = 100 + Math.random() * (this.height - 200);
+    // Spawn near a random door tile (white doorway)
+    const doorTile = this.map.getRandomDoorTile();
+    let x = this.map.getPixelWidth() / 2;
+    let y = this.map.getPixelHeight() / 2;
+    
+    if (doorTile) {
+      const center = this.map.tileCenter(doorTile.tx, doorTile.ty);
+      // Spawn slightly offset from the door center
+      const offsetDistance = 30 + Math.random() * 40; // 30-70 pixels away
+      const offsetAngle = Math.random() * Math.PI * 2;
+      x = center.x + Math.cos(offsetAngle) * offsetDistance;
+      y = center.y + Math.sin(offsetAngle) * offsetDistance;
+      
+      // Ensure it's within world bounds
+      x = Math.max(50, Math.min(this.map.getPixelWidth() - 50, x));
+      y = Math.max(50, Math.min(this.map.getPixelHeight() - 50, y));
+    }
+    
     this.shieldPickups.push(new ShieldPickup(x, y));
   }
 
@@ -706,9 +934,20 @@ export class Game {
   }
 
   render(ctx: CanvasRenderingContext2D, mouse: { x: number; y: number }) {
-    // Clear canvas
-    ctx.fillStyle = '#ffffff';
+    // Clear canvas (lab floor tint for contrast)
+    ctx.fillStyle = '#0b1220';
     ctx.fillRect(0, 0, this.width, this.height);
+
+    // Prefer smooth scaling for sprites
+    (ctx as any).imageSmoothingEnabled = true;
+    (ctx as any).imageSmoothingQuality = 'high';
+
+    // Camera transform
+    ctx.save();
+    ctx.translate(-this.cameraX, -this.cameraY);
+
+    // Render lab map
+    this.map.render(ctx);
 
     // Render particles
     this.particles.forEach(particle => particle.render(ctx));
@@ -729,7 +968,7 @@ export class Game {
     this.enemies.forEach(enemy => enemy.render(ctx, this.player.position));
 
     // Render player
-    this.player.render(ctx, new Vector2(mouse.x, mouse.y));
+    this.player.render(ctx, new Vector2(mouse.x + this.cameraX, mouse.y + this.cameraY));
 
     // Render katana swing arc
     if (this.meleeSwingActive) {
@@ -748,15 +987,31 @@ export class Game {
       ctx.restore();
     }
 
+    // Restore to screen space
+    ctx.restore();
+
     // Time scale indicator
     if (this.timeScale < 1) {
       ctx.fillStyle = 'rgba(255, 0, 0, 0.06)';
       ctx.fillRect(0, 0, this.width, this.height);
     }
+
+    // Minimap is drawn in the HUD panel via Game.renderMinimap
   }
 
   reset() {
-    this.player = new Player(this.width / 2, this.height / 2);
+    // Spawn player on a door tile (the ones with white tech dots)
+    let px = this.map.getPixelWidth() / 2;
+    let py = this.map.getPixelHeight() / 2;
+    
+    const doorTile = this.map.getRandomDoorTile();
+    if (doorTile) {
+      const c = this.map.tileCenter(doorTile.tx, doorTile.ty);
+      px = c.x; 
+      py = c.y;
+    }
+    
+    this.player = new Player(px, py);
     this.enemies = [];
     this.bullets = [];
     this.particles = [];
@@ -794,6 +1049,186 @@ export class Game {
     this.meleeSwingElapsed = 0;
     this.meleeSwingActive = true;
     this.meleeHitThisSwing.clear();
+  }
+
+  // Find a door to a specific room
+  private findDoorToRoom(targetRoom: any): Vector2 | null {
+    if (!targetRoom || !targetRoom.doors || targetRoom.doors.length === 0) return null;
+    
+    // Find the closest door to the player
+    let closestDoor = null;
+    let closestDistance = Infinity;
+    
+    for (const door of targetRoom.doors) {
+      const doorWorldX = door.x * (this.map as any).tileSize + (this.map as any).tileSize / 2;
+      const doorWorldY = door.y * (this.map as any).tileSize + (this.map as any).tileSize / 2;
+      const distance = this.player.position.distanceTo(new Vector2(doorWorldX, doorWorldY));
+      
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestDoor = new Vector2(doorWorldX, doorWorldY);
+      }
+    }
+    
+    return closestDoor;
+  }
+  
+  // Choose the closest door tile of a room from a given starting tile
+  private findClosestDoorTile(targetRoom: any, fromTile: { tx: number; ty: number }): { tx: number; ty: number } | null {
+    if (!targetRoom || !targetRoom.doors || !(targetRoom.doors as any[]).length) return null;
+    let best: { tx: number; ty: number } | null = null;
+    let bestDist = Infinity;
+    for (const door of targetRoom.doors as Array<{ x: number; y: number }>) {
+      const d = Math.abs(door.x - fromTile.tx) + Math.abs(door.y - fromTile.ty);
+      if (d < bestDist) {
+        bestDist = d;
+        best = { tx: door.x, ty: door.y };
+      }
+    }
+    return best;
+  }
+  
+  // Find a nearby empty tile to move to
+  private findNearbyEmptyTile(position: Vector2): Vector2 | null {
+    const currentTile = this.map.worldToTile(position.x, position.y);
+    
+    // Check adjacent tiles
+    const directions = [[0, 1], [0, -1], [1, 0], [-1, 0], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+    
+    for (const [dx, dy] of directions) {
+      const tx = currentTile.tx + dx;
+      const ty = currentTile.ty + dy;
+      const tile = (this.map as any).get(tx, ty);
+      
+      if (tile === 'empty' || tile === 'door') {
+        const center = this.map.tileCenter(tx, ty);
+        return new Vector2(center.x, center.y);
+      }
+    }
+    
+    return null;
+  }
+
+  // BFS pathfinding to find next step toward target
+  private findNextStep(fromX: number, fromY: number, toX: number, toY: number): { tx: number; ty: number } | null {
+    const cols = (this.map as any).cols;
+    const rows = (this.map as any).rows;
+    
+    // Early exit if target is the same as start
+    if (fromX === toX && fromY === toY) return null;
+    
+    // BFS setup
+    const visited = new Set<string>();
+    const queue: Array<{ x: number; y: number; parent: { x: number; y: number } | null }> = [];
+    queue.push({ x: fromX, y: fromY, parent: null });
+    visited.add(`${fromX},${fromY}`);
+    
+    const directions = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+    
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      
+      // If we reached the target, backtrack to find first step
+      if (current.x === toX && current.y === toY) {
+        // Backtrack to find the first step from the start node
+        let step = current;
+        while (step.parent && !(step.parent.x === fromX && step.parent.y === fromY)) {
+          step = step.parent as any;
+        }
+        return { tx: step.x, ty: step.y };
+      }
+      
+      // Explore neighbors
+      for (const [dx, dy] of directions) {
+        const nx = current.x + dx;
+        const ny = current.y + dy;
+        const key = `${nx},${ny}`;
+        
+        // Skip if out of bounds, already visited, or blocked
+        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows || visited.has(key)) {
+          continue;
+        }
+        
+        const tile = (this.map as any).get(nx, ny);
+        if (tile !== 'empty' && tile !== 'door') continue;
+        
+        visited.add(key);
+        queue.push({ x: nx, y: ny, parent: current });
+      }
+    }
+    
+    return null; // No path found
+  }
+
+  // Friendly room label for HUD
+  public getPlayerRoomLabel(): string {
+    const room = this.map.getRoomContaining(this.player.position.x, this.player.position.y);
+    if (!room) return 'Hallway';
+    const t = (room as any).type as string;
+    switch (t) {
+      case 'medbay': return 'Medbay';
+      case 'animal_testing': return 'Animal Testing';
+      case 'research': return 'Research';
+      case 'storage': return 'Storage';
+      case 'security': return 'Security';
+      case 'command': return 'Command';
+      default: return 'Room';
+    }
+  }
+
+  // Render a simple minimap showing dots and walls
+  public renderMinimap(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    const tileSize = (this.map as any).tileSize;
+    const cols = (this.map as any).cols;
+    const rows = (this.map as any).rows;
+    
+    // Calculate scale to fit minimap
+    const scaleX = width / (cols * tileSize);
+    const scaleY = height / (rows * tileSize);
+    const scale = Math.min(scaleX, scaleY);
+    
+    ctx.save();
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, width, height);
+    
+    // Render tiles
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        const tile = (this.map as any).get(x, y);
+        const px = x * tileSize * scale;
+        const py = y * tileSize * scale;
+        const size = tileSize * scale;
+        
+        if (tile === 'wall') {
+          ctx.fillStyle = '#666666';
+          ctx.fillRect(px, py, size, size);
+        } else {
+          // Don't distinguish doors - treat them as regular walkable space
+          ctx.fillStyle = '#222222';
+          ctx.fillRect(px, py, size, size);
+        }
+      }
+    }
+    
+    // Render player as green dot
+    const playerX = this.player.position.x * scale;
+    const playerY = this.player.position.y * scale;
+    ctx.fillStyle = '#00ff00';
+    ctx.beginPath();
+    ctx.arc(playerX, playerY, 3, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Render enemies as red dots
+    ctx.fillStyle = '#ff0000';
+    for (const enemy of this.enemies) {
+      const enemyX = enemy.position.x * scale;
+      const enemyY = enemy.position.y * scale;
+      ctx.beginPath();
+      ctx.arc(enemyX, enemyY, 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    
+    ctx.restore();
   }
 
   // Check enemies along the sweep from start..current (unwrapped radians)

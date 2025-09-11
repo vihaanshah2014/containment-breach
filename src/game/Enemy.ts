@@ -1,5 +1,6 @@
 import { Vector2 } from './Vector2';
 import { Weapon, WeaponType } from './Weapon';
+import type { SpriteFrame } from '../assets/SpriteSheet';
 
 export class Enemy {
   public id: number;
@@ -10,6 +11,9 @@ export class Enemy {
   private speed: number;
   private shootCooldown: number = 0;
   private lastShotTime: number = 0;
+  public sprite?: SpriteFrame;
+  private stuckTime: number = 0;
+  private sideBias: number = Math.random() < 0.5 ? 1 : -1;
 
   private static nextId = 1;
 
@@ -28,7 +32,11 @@ export class Enemy {
     }
   }
 
-  update(deltaTime: number, playerPosition: Vector2): { bullets: any[], thrownWeapon: Weapon | null } {
+  update(
+    deltaTime: number,
+    playerPosition: Vector2,
+    collider?: (from: Vector2, to: Vector2, radius: number) => Vector2
+  ): { bullets: any[], thrownWeapon: Weapon | null } {
     const result = { bullets: [] as any[], thrownWeapon: null as Weapon | null };
     
     // Move toward player
@@ -72,15 +80,53 @@ export class Enemy {
     
     // Move toward player (slower if shooting)
     const moveSpeed = this.weapon && distanceToPlayer < this.weapon.range ? this.speed * 0.3 : this.speed;
-    this.position = this.position.add(direction.multiply(moveSpeed * (deltaTime / 1000)));
+    const target = this.position.add(direction.multiply(moveSpeed * (deltaTime / 1000)));
+    if (collider) {
+      this.position = collider(this.position, target, 12);
+    } else {
+      this.position = target;
+    }
     
     return result;
   }
 
   render(ctx: CanvasRenderingContext2D, playerPosition: Vector2) {
-    // Draw enemy body
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(this.position.x - 10, this.position.y - 10, 20, 20);
+    const x = this.position.x;
+    const y = this.position.y;
+    const dir = playerPosition.subtract(this.position).normalize();
+    const angle = Math.atan2(dir.y, dir.x);
+    if (this.sprite) {
+      const drawW = 42;
+      const drawH = 42;
+      ctx.save();
+      ctx.translate(x, y);
+      // Rotate sprite 90° counterclockwise to align facing
+      ctx.rotate(angle - Math.PI / 2);
+      ctx.drawImage(
+        this.sprite.image,
+        this.sprite.sx,
+        this.sprite.sy,
+        this.sprite.sw,
+        this.sprite.sh,
+        -drawW / 2,
+        -drawH / 2,
+        drawW,
+        drawH
+      );
+      ctx.restore();
+    } else {
+      // Fallback hazmat ellipse
+      ctx.save();
+      ctx.fillStyle = '#ffd54d'; // hazmat yellow
+      ctx.beginPath();
+      ctx.ellipse(x, y, 11, 14, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.translate(x, y);
+      ctx.rotate(angle - Math.PI / 2);
+      ctx.fillStyle = '#111827';
+      ctx.fillRect(4, -4, 7, 8);
+      ctx.restore();
+    }
 
     // Shield visual
     if (this.shield > 0) {
@@ -91,10 +137,7 @@ export class Enemy {
       ctx.stroke();
     }
 
-    // Red outline
-    ctx.strokeStyle = '#ff0000';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(this.position.x - 10, this.position.y - 10, 20, 20);
+    // Removed red outline accent for cleaner look
 
     // Draw weapon if enemy has one
     if (this.weapon) {
