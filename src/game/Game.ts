@@ -6,7 +6,10 @@ import { Particle } from './Particle';
 import { Footstep } from './Footstep';
 import { WeaponPickup } from './WeaponPickup';
 import { ShieldPickup } from './ShieldPickup';
+import { HealthPickup } from './HealthPickup';
+import { AmmoPickup } from './AmmoPickup';
 import { ThrownWeapon } from './ThrownWeapon';
+import { Grenade } from './Grenade';
 import { Weapon, WeaponType } from './Weapon';
 import { TileMap } from './TileMap';
 
@@ -21,6 +24,9 @@ export class Game {
   private weaponPickups: WeaponPickup[] = [];
   private thrownWeapons: ThrownWeapon[] = [];
   private shieldPickups: ShieldPickup[] = [];
+  private healthPickups: HealthPickup[] = [];
+  private ammoPickups: AmmoPickup[] = [];
+  private grenades: Grenade[] = [];
   private map: TileMap;
   private score: number = 0;
   private timeScale: number = 1;
@@ -51,6 +57,12 @@ export class Game {
   private meleeSwingDuration: number = 200; // ms
   private meleeHitThisSwing: Set<Enemy> = new Set();
   private aimDirection: Vector2 = new Vector2(1, 0);
+  
+  // Grenade throwing state
+  private grenadeCharging: boolean = false;
+  private grenadeChargeStart: number = 0;
+  private grenadeChargeTime: number = 0;
+  private maxGrenadeCharge: number = 2000; // 2 seconds max charge
 
   // Stats
   private bulletsFired: number = 0;
@@ -109,14 +121,43 @@ export class Game {
     const worldH = Math.max(1200, Math.floor(height * 2.5));
     this.map = new TileMap(worldW, worldH);
     
-    // Spawn player on a door tile (ALWAYS, no fallbacks!)
-    const doorTile = this.map.getRandomDoorTile();
-    if (!doorTile) {
-      throw new Error('CRITICAL: No door tiles available for player spawn!');
-    }
-    const spawnPos = this.map.tileCenter(doorTile.tx, doorTile.ty);
+    // Spawn player in a safe location (spawn tiles first, then room centers, then doors as fallback)
+    let spawnTile = this.map.getRandomSpawnTile(); // Try spawn tiles first (room centers)
     
+    if (!spawnTile) {
+      // Fallback: try to spawn in center of a room
+      const rooms = this.map.getRooms();
+      if (rooms.length > 0) {
+        const room = rooms[Math.floor(Math.random() * rooms.length)];
+        spawnTile = this.map.getRandomEmptyTileInRoom(rooms.indexOf(room));
+      }
+    }
+    
+    if (!spawnTile) {
+      // Last resort: use a random empty tile (safer than doors)
+      spawnTile = this.map.getRandomEmptyTile(false);
+    }
+    
+    if (!spawnTile) {
+      // Emergency fallback: door tile if nothing else works
+      spawnTile = this.map.getRandomDoorTile();
+    }
+    
+    if (!spawnTile) {
+      throw new Error('CRITICAL: No safe spawn location found!');
+    }
+    
+    const spawnPos = this.map.tileCenter(spawnTile.tx, spawnTile.ty);
     this.player = new Player(spawnPos.x, spawnPos.y);
+    
+    // Force spawn initial enemies for wave 1 immediately
+    console.log(`🎮 GAME START - Spawning ${this.enemiesPerWave} initial enemies for Wave 1`);
+    for (let i = 0; i < Math.min(3, this.enemiesPerWave); i++) {
+      setTimeout(() => {
+        this.spawnEnemy();
+        console.log(`🚀 Initial enemy ${i + 1} spawned`);
+      }, i * 500); // Spawn one every 500ms
+    }
   }
 
   resize(width: number, height: number) {
@@ -217,6 +258,46 @@ export class Game {
         this.meleeSwingActive = false;
         this.meleeHitThisSwing.clear();
       }
+    }
+
+    // Grenade charging and throwing with Q key
+    const qKeyPressed = keys.has('q');
+    
+    if (qKeyPressed && !this.grenadeCharging && this.player.canThrowGrenade()) {
+      // Start charging grenade
+      this.grenadeCharging = true;
+      this.grenadeChargeStart = Date.now();
+      this.grenadeChargeTime = 0;
+      console.log(`💣 Grenade charging started...`);
+    } else if (qKeyPressed && this.grenadeCharging) {
+      // Continue charging (update charge time)
+      this.grenadeChargeTime = Math.min(Date.now() - this.grenadeChargeStart, this.maxGrenadeCharge);
+    } else if (!qKeyPressed && this.grenadeCharging) {
+      // Q released - throw grenade with accumulated power
+      const worldMouseX = mouse.x + this.cameraX;
+      const worldMouseY = mouse.y + this.cameraY;
+      const direction = new Vector2(worldMouseX - this.player.position.x, worldMouseY - this.player.position.y).normalize();
+      
+      if (this.player.throwGrenade()) {
+        // Calculate throw power based on charge time (200-800 power)
+        const chargeRatio = this.grenadeChargeTime / this.maxGrenadeCharge;
+        const minPower = 200;
+        const maxPower = 800;
+        const throwPower = minPower + (chargeRatio * (maxPower - minPower));
+        
+        this.grenades.push(new Grenade(
+          this.player.position.add(direction.multiply(30)),
+          direction,
+          throwPower
+        ));
+        
+        console.log(`💣 Grenade thrown! Power: ${throwPower.toFixed(0)} (${(chargeRatio * 100).toFixed(0)}% charge), ${this.player.grenades} remaining`);
+        this.onHudUpdate?.();
+      }
+      
+      // Reset charging state
+      this.grenadeCharging = false;
+      this.grenadeChargeTime = 0;
     }
 
     // Weapon throwing
@@ -416,6 +497,24 @@ export class Game {
 
     // Update shield pickups
     this.shieldPickups.forEach(p => p.update(scaledDeltaTime));
+    
+    // Update health pickups
+    this.healthPickups.forEach(p => p.update(scaledDeltaTime));
+    
+    // Update ammo pickups
+    this.ammoPickups.forEach(p => p.update(scaledDeltaTime));
+
+    // Update grenades and handle explosions
+    this.grenades = this.grenades.filter(grenade => {
+      const exploded = grenade.update(scaledDeltaTime);
+      
+      if (exploded) {
+        this.handleGrenadeExplosion(grenade);
+        return false; // Remove grenade after explosion
+      }
+      
+      return true; // Keep grenade
+    });
 
     // Update thrown weapons
     this.thrownWeapons = this.thrownWeapons.filter(thrownWeapon => {
@@ -454,22 +553,51 @@ export class Game {
       return !footstep.isDead();
     });
 
-    // Spawn enemies based on wave system
+    // Spawn enemies continuously - keep the action going!
     this.enemySpawnTimer += scaledDeltaTime;
-    if (this.enemySpawnTimer >= this.enemySpawnRate && this.enemies.length < this.enemiesPerWave) {
+    const currentEnemies = this.enemies.length;
+    const targetEnemies = this.enemiesPerWave;
+    
+    // Speed up spawning if we're behind on enemy count
+    const adjustedSpawnRate = currentEnemies < Math.floor(targetEnemies * 0.5) 
+      ? this.enemySpawnRate * 0.6 // Spawn faster if less than 50% of target enemies
+      : this.enemySpawnRate;
+    
+    if (this.enemySpawnTimer >= adjustedSpawnRate && currentEnemies < Math.max(8, targetEnemies * 1.5)) {
       this.spawnEnemy();
       this.enemySpawnTimer = 0;
+      console.log(`⚔️ Enemy spawned (${currentEnemies + 1}) - Wave ${this.waveNumber}`);
     }
 
-    // Spawn pickups occasionally
+    // Spawn pickups occasionally - frequency and quality scale with waves
     this.weaponSpawnTimer += scaledDeltaTime;
-    if (this.weaponSpawnTimer >= 12000 - (this.waveNumber * 500)) { // Faster spawns in later waves
-      if (Math.random() < 0.25) this.spawnShieldPickup(); else this.spawnWeaponPickup();
+    const pickupInterval = Math.max(3000, 12000 - (this.waveNumber * 800)); // Much more frequent at higher waves
+    
+    if (this.weaponSpawnTimer >= pickupInterval) {
+      const pickupRoll = Math.random();
+      
+      // AGGRESSIVE pickup scaling - more health/ammo at higher waves
+      const healthChance = Math.min(0.4, 0.05 + (this.waveNumber * 0.04));
+      const ammoChance = healthChance + Math.min(0.35, 0.08 + (this.waveNumber * 0.03));
+      const shieldChance = ammoChance + Math.min(0.4, 0.12 + (this.waveNumber * 0.025));
+      
+      if (pickupRoll < healthChance) {
+        this.spawnHealthPickup();
+      } else if (pickupRoll < ammoChance) {
+        this.spawnAmmoPickup();
+      } else if (pickupRoll < shieldChance) {
+        this.spawnShieldPickup();
+      } else {
+        this.spawnWeaponPickup();
+      }
+      
       this.weaponSpawnTimer = 0;
+      console.log(`📦 Pickup spawned at wave ${this.waveNumber} (next in ${pickupInterval}ms)`);
     }
 
-    // Check for wave completion
-    if (this.enemies.length === 0 && this.enemiesKilledThisWave >= this.enemiesPerWave) {
+    // Check for wave completion - advance immediately when kill target is reached
+    if (this.enemiesKilledThisWave >= this.enemiesPerWave) {
+      console.log(`🚀 WAVE ${this.waveNumber} → ${this.waveNumber + 1} ADVANCE! Killed ${this.enemiesKilledThisWave}/${this.enemiesPerWave} enemies`);
       this.nextWave();
     }
 
@@ -491,12 +619,56 @@ export class Game {
   private nextWave() {
     this.waveNumber++;
     this.enemiesKilledThisWave = 0;
-    this.enemiesPerWave = Math.min(15, 5 + Math.floor(this.waveNumber / 2)); // Increase enemies per wave
-    this.enemySpawnRate = Math.max(300, this.baseSpawnRate - (this.waveNumber * 150)); // Faster spawning
+    
+    // SUPER FAST scaling - noticeable difficulty increase every wave
+    this.enemiesPerWave = Math.min(25, 3 + Math.floor(this.waveNumber * 1.5));
+    
+    // Blazing fast spawning as waves progress
+    this.enemySpawnRate = Math.max(150, this.baseSpawnRate - (this.waveNumber * 250));
+    
+    console.log(`🌊 WAVE ${this.waveNumber} START - Enemies: ${this.enemiesPerWave}, Spawn Rate: ${this.enemySpawnRate}ms`);
+    
     this.onWaveUpdate?.(this.waveNumber);
     
-    // Spawn a weapon pickup at the start of each wave
+    // Wave completion celebration particles
+    for (let i = 0; i < 12; i++) {
+      this.particles.push(new Particle(
+        this.player.position.x + (Math.random() - 0.5) * 80,
+        this.player.position.y + (Math.random() - 0.5) * 80,
+        Math.random() * 360,
+        120 + Math.random() * 180,
+        this.waveNumber >= 10 ? '#ff4444' : this.waveNumber >= 5 ? '#ffaa00' : '#00ccff'
+      ));
+    }
+    
+    // Give player a grenade every wave
+    this.player.addGrenades(1);
+    console.log(`💣 +1 Grenade! Total: ${this.player.grenades}`);
+    
+    // Guaranteed weapon pickup at start of each wave
     this.spawnWeaponPickup();
+    
+    // Bonus pickups based on wave number
+    if (this.waveNumber >= 3) {
+      this.spawnShieldPickup();
+    }
+    if (this.waveNumber >= 5) {
+      this.spawnAmmoPickup();
+    }
+    if (this.waveNumber >= 7 && this.waveNumber % 3 === 1) {
+      this.spawnHealthPickup();
+    }
+    
+    // Extra weapon every 5th wave
+    if (this.waveNumber % 5 === 0) {
+      setTimeout(() => {
+        this.spawnWeaponPickup();
+        console.log(`🎉 WAVE ${this.waveNumber} BONUS WEAPON!`);
+      }, 1000);
+    }
+    
+    // Reset weapon spawn timer for faster pickup spawning in higher waves
+    this.weaponSpawnTimer = 0;
   }
 
   private handlePunchAttack(direction: Vector2) {
@@ -619,11 +791,26 @@ export class Game {
     if (!tile) return;
     const { x, y } = this.map.tileCenter(tile.tx, tile.ty);
 
-    // Increase weapon chance with wave number
-    const weaponChance = Math.min(0.9, 0.4 + (this.waveNumber * 0.1));
-    const shieldChance = Math.min(0.5, 0.1 + (this.waveNumber * 0.05));
-    const shieldHits = Math.random() < shieldChance ? 2 : 0;
+    // SUPER AGGRESSIVE difficulty scaling - visible progression every wave!
+    const weaponChance = Math.min(0.98, 0.2 + (this.waveNumber * 0.15)); // Weapons scale fast
+    const shieldChance = Math.min(0.9, 0.05 + (this.waveNumber * 0.12)); // Shields scale fast
+    
+    // Scale shield strength aggressively with wave number
+    let shieldHits = 0;
+    if (Math.random() < shieldChance) {
+      if (this.waveNumber <= 2) {
+        shieldHits = 1; // 1 shield hit early
+      } else if (this.waveNumber <= 5) {
+        shieldHits = 1 + Math.floor(Math.random() * 3); // 1-3 shield hits
+      } else if (this.waveNumber <= 10) {
+        shieldHits = 2 + Math.floor(Math.random() * 4); // 2-5 shield hits
+      } else {
+        shieldHits = 3 + Math.floor(Math.random() * 6); // 3-8 shield hits for insane waves
+      }
+    }
+    
     const e = new Enemy(x, y, weaponChance, shieldHits);
+    console.log(`👹 Enemy spawned: Wave ${this.waveNumber}, Weapon: ${(weaponChance * 100).toFixed(0)}%, Shield: ${shieldHits}`);
     // Assign a random enemy sprite if available
     if (this.enemySprites.length) {
       e.sprite = this.enemySprites[Math.floor(Math.random() * this.enemySprites.length)];
@@ -635,11 +822,38 @@ export class Game {
     const weaponTypes = [WeaponType.PISTOL, WeaponType.RIFLE, WeaponType.SHOTGUN, WeaponType.KATANA, WeaponType.SHURIKEN];
     const randomType = weaponTypes[Math.floor(Math.random() * weaponTypes.length)];
     
-    // Try to spawn on a table first
+    // Try to spawn on a table first, but place on the side for easier access
     const table = this.map.getRandomTable();
     if (table) {
-      const x = table.x + table.width / 2;
-      const y = table.y + table.height / 2;
+      // Spawn on one of the four sides of the table with some offset
+      const side = Math.floor(Math.random() * 4);
+      let x: number, y: number;
+      const offset = 25; // Distance from table edge
+      
+      switch (side) {
+        case 0: // Top
+          x = table.x + table.width / 2;
+          y = table.y - offset;
+          break;
+        case 1: // Right
+          x = table.x + table.width + offset;
+          y = table.y + table.height / 2;
+          break;
+        case 2: // Bottom
+          x = table.x + table.width / 2;
+          y = table.y + table.height + offset;
+          break;
+        case 3: // Left
+        default:
+          x = table.x - offset;
+          y = table.y + table.height / 2;
+          break;
+      }
+      
+      // Ensure it's within world bounds
+      x = Math.max(50, Math.min(this.map.getPixelWidth() - 50, x));
+      y = Math.max(50, Math.min(this.map.getPixelHeight() - 50, y));
+      
       this.weaponPickups.push(new WeaponPickup(x, y, randomType));
       return;
     }
@@ -666,11 +880,38 @@ export class Game {
   }
 
   private spawnShieldPickup() {
-    // Try to spawn on a table first
+    // Try to spawn on a table first, but place on the side for easier access
     const table = this.map.getRandomTable();
     if (table) {
-      const x = table.x + table.width / 2;
-      const y = table.y + table.height / 2;
+      // Spawn on one of the four sides of the table with some offset
+      const side = Math.floor(Math.random() * 4);
+      let x: number, y: number;
+      const offset = 25; // Distance from table edge
+      
+      switch (side) {
+        case 0: // Top
+          x = table.x + table.width / 2;
+          y = table.y - offset;
+          break;
+        case 1: // Right
+          x = table.x + table.width + offset;
+          y = table.y + table.height / 2;
+          break;
+        case 2: // Bottom
+          x = table.x + table.width / 2;
+          y = table.y + table.height + offset;
+          break;
+        case 3: // Left
+        default:
+          x = table.x - offset;
+          y = table.y + table.height / 2;
+          break;
+      }
+      
+      // Ensure it's within world bounds
+      x = Math.max(50, Math.min(this.map.getPixelWidth() - 50, x));
+      y = Math.max(50, Math.min(this.map.getPixelHeight() - 50, y));
+      
       this.shieldPickups.push(new ShieldPickup(x, y));
       return;
     }
@@ -694,6 +935,216 @@ export class Game {
     }
     
     this.shieldPickups.push(new ShieldPickup(x, y));
+  }
+
+  private spawnHealthPickup() {
+    // Try to spawn on a table first, but place on the side for easier access
+    const table = this.map.getRandomTable();
+    if (table) {
+      // Spawn on one of the four sides of the table with some offset
+      const side = Math.floor(Math.random() * 4);
+      let x: number, y: number;
+      const offset = 25; // Distance from table edge
+      
+      switch (side) {
+        case 0: // Top
+          x = table.x + table.width / 2;
+          y = table.y - offset;
+          break;
+        case 1: // Right
+          x = table.x + table.width + offset;
+          y = table.y + table.height / 2;
+          break;
+        case 2: // Bottom
+          x = table.x + table.width / 2;
+          y = table.y + table.height + offset;
+          break;
+        case 3: // Left
+        default:
+          x = table.x - offset;
+          y = table.y + table.height / 2;
+          break;
+      }
+      
+      // Ensure it's within world bounds
+      x = Math.max(50, Math.min(this.map.getPixelWidth() - 50, x));
+      y = Math.max(50, Math.min(this.map.getPixelHeight() - 50, y));
+      
+      this.healthPickups.push(new HealthPickup(x, y));
+      return;
+    }
+    
+    // Fallback: spawn near a random door tile
+    const doorTile = this.map.getRandomDoorTile();
+    let x = this.map.getPixelWidth() / 2;
+    let y = this.map.getPixelHeight() / 2;
+    
+    if (doorTile) {
+      const center = this.map.tileCenter(doorTile.tx, doorTile.ty);
+      // Spawn slightly offset from the door center
+      const offsetDistance = 30 + Math.random() * 40; // 30-70 pixels away
+      const offsetAngle = Math.random() * Math.PI * 2;
+      x = center.x + Math.cos(offsetAngle) * offsetDistance;
+      y = center.y + Math.sin(offsetAngle) * offsetDistance;
+      
+      // Ensure it's within world bounds
+      x = Math.max(50, Math.min(this.map.getPixelWidth() - 50, x));
+      y = Math.max(50, Math.min(this.map.getPixelHeight() - 50, y));
+    }
+    
+    this.healthPickups.push(new HealthPickup(x, y));
+  }
+
+  private spawnAmmoPickup() {
+    // Try to spawn on a table first, but place on the side for easier access
+    const table = this.map.getRandomTable();
+    if (table) {
+      // Spawn on one of the four sides of the table with some offset
+      const side = Math.floor(Math.random() * 4);
+      let x: number, y: number;
+      const offset = 25; // Distance from table edge
+      
+      switch (side) {
+        case 0: // Top
+          x = table.x + table.width / 2;
+          y = table.y - offset;
+          break;
+        case 1: // Right
+          x = table.x + table.width + offset;
+          y = table.y + table.height / 2;
+          break;
+        case 2: // Bottom
+          x = table.x + table.width / 2;
+          y = table.y + table.height + offset;
+          break;
+        case 3: // Left
+        default:
+          x = table.x - offset;
+          y = table.y + table.height / 2;
+          break;
+      }
+      
+      // Ensure it's within world bounds
+      x = Math.max(50, Math.min(this.map.getPixelWidth() - 50, x));
+      y = Math.max(50, Math.min(this.map.getPixelHeight() - 50, y));
+      
+      this.ammoPickups.push(new AmmoPickup(x, y));
+      return;
+    }
+    
+    // Fallback: spawn near a random door tile
+    const doorTile = this.map.getRandomDoorTile();
+    let x = this.map.getPixelWidth() / 2;
+    let y = this.map.getPixelHeight() / 2;
+    
+    if (doorTile) {
+      const center = this.map.tileCenter(doorTile.tx, doorTile.ty);
+      // Spawn slightly offset from the door center
+      const offsetDistance = 30 + Math.random() * 40; // 30-70 pixels away
+      const offsetAngle = Math.random() * Math.PI * 2;
+      x = center.x + Math.cos(offsetAngle) * offsetDistance;
+      y = center.y + Math.sin(offsetAngle) * offsetDistance;
+      
+      // Ensure it's within world bounds
+      x = Math.max(50, Math.min(this.map.getPixelWidth() - 50, x));
+      y = Math.max(50, Math.min(this.map.getPixelHeight() - 50, y));
+    }
+    
+    this.ammoPickups.push(new AmmoPickup(x, y));
+  }
+
+  private handleGrenadeExplosion(grenade: Grenade) {
+    const explosionPos = grenade.position;
+    const blastRadius = grenade.getBlastRadius();
+    
+    console.log(`💥 GRENADE EXPLOSION at (${explosionPos.x.toFixed(0)}, ${explosionPos.y.toFixed(0)}) - Radius: ${blastRadius}`);
+    
+    // Create massive explosion particles
+    for (let i = 0; i < 20; i++) {
+      this.particles.push(new Particle(
+        explosionPos.x + (Math.random() - 0.5) * 40,
+        explosionPos.y + (Math.random() - 0.5) * 40,
+        Math.random() * 360,
+        200 + Math.random() * 300,
+        i < 10 ? '#ff4400' : '#ffaa00'
+      ));
+    }
+    
+    // Add shockwave particles
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2;
+      const distance = blastRadius * 0.8;
+      this.particles.push(new Particle(
+        explosionPos.x + Math.cos(angle) * distance,
+        explosionPos.y + Math.sin(angle) * distance,
+        angle * (180 / Math.PI),
+        150 + Math.random() * 200,
+        '#ffff88'
+      ));
+    }
+    
+    // Damage enemies in blast radius
+    let enemiesKilled = 0;
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const enemy = this.enemies[i];
+      const distance = explosionPos.distanceTo(enemy.position);
+      
+      if (distance <= blastRadius) {
+        const damage = grenade.getDamageAtDistance(distance);
+        console.log(`💥 Enemy hit by grenade: distance ${distance.toFixed(0)}, damage ${damage}`);
+        
+        // Grenades bypass shields and do massive damage
+        if (damage >= 3 || enemy.shield === 0) {
+          // Drop weapon if enemy had one
+          if (enemy.weapon) {
+            this.weaponPickups.push(new WeaponPickup(
+              enemy.position.x,
+              enemy.position.y,
+              enemy.weapon.type
+            ));
+          }
+          
+          this.enemies.splice(i, 1);
+          this.score++;
+          this.enemiesKilledThisWave++;
+          enemiesKilled++;
+          this.onScoreUpdate?.(this.score);
+        } else {
+          // Reduce shield significantly
+          enemy.shield = Math.max(0, enemy.shield - damage);
+          console.log(`🛡️ Enemy shield reduced to ${enemy.shield}`);
+        }
+      }
+    }
+    
+    // Damage player if too close (friendly fire!)
+    const playerDistance = explosionPos.distanceTo(this.player.position);
+    if (playerDistance <= blastRadius) {
+      const playerDamage = grenade.getDamageAtDistance(playerDistance);
+      if (playerDamage > 0) {
+        console.log(`💥 PLAYER HIT BY OWN GRENADE! Distance: ${playerDistance.toFixed(0)}, Damage: ${playerDamage}`);
+        
+        // Player takes damage from their own grenade
+        for (let i = 0; i < playerDamage; i++) {
+          this.player.takeDamage();
+        }
+        
+        // Visual feedback for player damage
+        for (let k = 0; k < 8; k++) {
+          this.particles.push(new Particle(
+            this.player.position.x,
+            this.player.position.y,
+            Math.random() * 360,
+            100 + Math.random() * 150,
+            '#ff0000'
+          ));
+        }
+        
+        this.onHudUpdate?.();
+      }
+    }
+    
+    console.log(`💥 Grenade killed ${enemiesKilled} enemies`);
   }
 
   private checkCollisions() {
@@ -922,6 +1373,54 @@ export class Game {
         this.onHudUpdate?.();
       }
     }
+    
+    // Player vs Health Pickups
+    for (let i = this.healthPickups.length - 1; i >= 0; i--) {
+      const pickup = this.healthPickups[i];
+      if (pickup.position.distanceTo(this.player.position) < 30) {
+        this.player.heal(25); // Heal 25 health
+        this.healthPickups.splice(i, 1);
+        // Health pickup particles
+        for (let k = 0; k < 8; k++) {
+          this.particles.push(new Particle(
+            this.player.position.x,
+            this.player.position.y,
+            Math.random() * 360,
+            100 + Math.random() * 120,
+            '#ff4444'
+          ));
+        }
+        this.onHudUpdate?.();
+      }
+    }
+    
+    // Player vs Ammo Pickups
+    for (let i = this.ammoPickups.length - 1; i >= 0; i--) {
+      const pickup = this.ammoPickups[i];
+      if (pickup.position.distanceTo(this.player.position) < 30) {
+        if (this.player.weapon && this.player.weapon.ammo < this.player.weapon.maxAmmo) {
+          // Restore ammo to current weapon
+          const ammoToAdd = Math.min(
+            Math.floor(this.player.weapon.maxAmmo * 0.5), // 50% of max ammo
+            this.player.weapon.maxAmmo - this.player.weapon.ammo
+          );
+          this.player.weapon.ammo += ammoToAdd;
+          this.ammoPickups.splice(i, 1);
+          
+          // Ammo pickup particles
+          for (let k = 0; k < 8; k++) {
+            this.particles.push(new Particle(
+              this.player.position.x,
+              this.player.position.y,
+              Math.random() * 360,
+              100 + Math.random() * 120,
+              '#ffaa00'
+            ));
+          }
+          this.onHudUpdate?.();
+        }
+      }
+    }
 
     // Thrown weapons vs Enemies
     for (let i = this.thrownWeapons.length - 1; i >= 0; i--) {
@@ -1018,6 +1517,15 @@ export class Game {
 
     // Render shield pickups
     this.shieldPickups.forEach(pickup => pickup.render(ctx));
+    
+    // Render health pickups
+    this.healthPickups.forEach(pickup => pickup.render(ctx));
+    
+    // Render ammo pickups
+    this.ammoPickups.forEach(pickup => pickup.render(ctx));
+    
+    // Render grenades
+    this.grenades.forEach(grenade => grenade.render(ctx));
 
     // Render thrown weapons
     this.thrownWeapons.forEach(thrownWeapon => thrownWeapon.render(ctx));
@@ -1057,38 +1565,129 @@ export class Game {
       ctx.fillRect(0, 0, this.width, this.height);
     }
 
+    // Grenade charge indicator
+    if (this.grenadeCharging) {
+      const chargeRatio = this.grenadeChargeTime / this.maxGrenadeCharge;
+      const playerScreenX = this.player.position.x - this.cameraX;
+      const playerScreenY = this.player.position.y - this.cameraY;
+      
+      // Draw charging arc around player
+      ctx.save();
+      ctx.strokeStyle = chargeRatio > 0.8 ? '#ff4444' : chargeRatio > 0.5 ? '#ffaa00' : '#ffffff';
+      ctx.lineWidth = 4;
+      ctx.globalAlpha = 0.8;
+      
+      const radius = 25 + (chargeRatio * 15); // Grows from 25 to 40 pixels
+      const arcLength = chargeRatio * Math.PI * 2; // Full circle at max charge
+      
+      ctx.beginPath();
+      ctx.arc(playerScreenX, playerScreenY, radius, -Math.PI / 2, -Math.PI / 2 + arcLength, false);
+      ctx.stroke();
+      
+      // Add pulsing effect at high charge
+      if (chargeRatio > 0.7) {
+        const pulseAlpha = Math.sin(Date.now() * 0.01) * 0.3 + 0.4;
+        ctx.globalAlpha = pulseAlpha;
+        ctx.fillStyle = '#ff4444';
+        ctx.beginPath();
+        ctx.arc(playerScreenX, playerScreenY, radius + 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      
+      ctx.restore();
+      
+      // Draw trajectory preview line
+      const worldMouseX = mouse.x + this.cameraX;
+      const worldMouseY = mouse.y + this.cameraY;
+      const direction = new Vector2(worldMouseX - this.player.position.x, worldMouseY - this.player.position.y).normalize();
+      
+      // Estimate trajectory length based on charge
+      const trajectoryLength = 50 + (chargeRatio * 150); // 50-200 pixel preview
+      const endX = playerScreenX + (direction.x * trajectoryLength);
+      const endY = playerScreenY + (direction.y * trajectoryLength);
+      
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.6)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(playerScreenX, playerScreenY);
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // Minimap is drawn in the HUD panel via Game.renderMinimap
   }
 
   reset() {
-    // Spawn player on a door tile (ALWAYS, no fallbacks!)
-    const doorTile = this.map.getRandomDoorTile();
-    if (!doorTile) {
-      throw new Error('CRITICAL: No door tiles available for player spawn in reset!');
-    }
-    const spawnPos = this.map.tileCenter(doorTile.tx, doorTile.ty);
+    // Spawn player in a safe location (spawn tiles first, then room centers, then doors as fallback)
+    let spawnTile = this.map.getRandomSpawnTile(); // Try spawn tiles first (room centers)
     
+    if (!spawnTile) {
+      // Fallback: try to spawn in center of a room
+      const rooms = this.map.getRooms();
+      if (rooms.length > 0) {
+        const room = rooms[Math.floor(Math.random() * rooms.length)];
+        spawnTile = this.map.getRandomEmptyTileInRoom(rooms.indexOf(room));
+      }
+    }
+    
+    if (!spawnTile) {
+      // Last resort: use a random empty tile (safer than doors)
+      spawnTile = this.map.getRandomEmptyTile(false);
+    }
+    
+    if (!spawnTile) {
+      // Emergency fallback: door tile if nothing else works
+      spawnTile = this.map.getRandomDoorTile();
+    }
+    
+    if (!spawnTile) {
+      throw new Error('CRITICAL: No safe spawn location found!');
+    }
+    
+    const spawnPos = this.map.tileCenter(spawnTile.tx, spawnTile.ty);
     this.player = new Player(spawnPos.x, spawnPos.y);
     
     // Re-assign sprite if we have sprites loaded
     if (this.playableSprites.length > 0) {
       (this.player as any).sprite = this.playableSprites[0];
     }
+    
+    // Clear everything first
     this.enemies = [];
     this.bullets = [];
     this.particles = [];
     this.footsteps = [];
     this.weaponPickups = [];
     this.shieldPickups = [];
+    this.healthPickups = [];
+    this.ammoPickups = [];
     this.thrownWeapons = [];
+    this.grenades = [];
     this.score = 0;
     this.waveNumber = 1;
     this.enemiesKilledThisWave = 0;
-    this.enemiesPerWave = 5;
+    this.enemiesPerWave = 4; // Start with 4 enemies for wave 1
     this.enemySpawnTimer = 0;
     this.enemySpawnRate = this.baseSpawnRate;
-    this.difficultyTimer = 0;
     this.weaponSpawnTimer = 0;
+    
+    console.log(`🎮 GAME RESET - Starting Wave 1 with ${this.enemiesPerWave} enemies`);
+    
+    // Reset grenade charging state
+    this.grenadeCharging = false;
+    this.grenadeChargeTime = 0;
+    
+    // Force spawn initial enemies for wave 1 immediately on reset  
+    console.log(`🔄 GAME RESET - Spawning ${this.enemiesPerWave} initial enemies for Wave 1`);
+    for (let i = 0; i < Math.min(3, this.enemiesPerWave); i++) {
+      setTimeout(() => {
+        this.spawnEnemy();
+        console.log(`🚀 Reset enemy ${i + 1} spawned`);
+      }, i * 500); // Spawn one every 500ms
+    }
     this.meleeSwingActive = false;
     this.meleeHitThisSwing.clear();
     this.bulletsFired = 0;

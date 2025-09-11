@@ -7,9 +7,11 @@ export class Player {
   public health: number = 3;
   public weapon: Weapon | null = null;
   public shield: number = 0; // 0-100
+  public grenades: number = 1; // Start with 1 grenade
   public currentRoomIndex: number | null = null; // set by Game based on TileMap
   private shootCooldown: number = 0;
   private punchCooldown: number = 0;
+  private grenadeCooldown: number = 0;
   public sprite?: SpriteFrame;
   
   // Animation state
@@ -89,6 +91,11 @@ export class Player {
       this.punchCooldown -= deltaTime;
     }
 
+    // Update grenade cooldown
+    if (this.grenadeCooldown > 0) {
+      this.grenadeCooldown -= deltaTime;
+    }
+
     // Check if weapon is broken and remove it
     if (this.weapon && this.weapon.isBroken()) {
       this.weapon = null;
@@ -149,6 +156,25 @@ export class Player {
 
   addShield(amount: number) {
     this.shield = Math.min(100, this.shield + amount);
+  }
+
+  heal(amount: number) {
+    this.health = Math.min(3, this.health + amount); // Maximum health is 3
+  }
+
+  canThrowGrenade(): boolean {
+    return this.grenades > 0 && this.grenadeCooldown <= 0;
+  }
+
+  throwGrenade(): boolean {
+    if (!this.canThrowGrenade()) return false;
+    this.grenades--;
+    this.grenadeCooldown = 1000; // 1 second cooldown between grenades
+    return true;
+  }
+
+  addGrenades(count: number) {
+    this.grenades += count;
   }
 
   // Get footstep particles if moving

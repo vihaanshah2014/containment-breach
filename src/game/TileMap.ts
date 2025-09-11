@@ -667,14 +667,56 @@ export class TileMap {
           ctx.lineWidth = 1;
           ctx.strokeRect(px, py, this.tileSize, this.tileSize);
         } else {
-          // Light lab floor with subtle patterns
-          ctx.fillStyle = '#f0f6fa'; // light blue-gray floor
+          // Varied lab floor tiles with subtle patterns (no grid lines)
+          const floorVariant = ((x * 7) + (y * 11)) % 8; // Deterministic variation based on position
+          
+          switch (floorVariant) {
+            case 0:
+              ctx.fillStyle = '#f0f6fa'; // Original light blue-gray
+              break;
+            case 1:
+              ctx.fillStyle = '#f2f8fc'; // Slightly lighter blue-gray
+              break;
+            case 2:
+              ctx.fillStyle = '#eef4f8'; // Cooler tone
+              break;
+            case 3:
+              ctx.fillStyle = '#f4f9fd'; // Warmer light tone
+              break;
+            case 4:
+              ctx.fillStyle = '#f1f7fb'; // Medium blue-gray
+              break;
+            case 5:
+              ctx.fillStyle = '#f3f8fc'; // Light cool tone
+              break;
+            case 6:
+              ctx.fillStyle = '#eff5f9'; // Slightly darker blue-gray
+              break;
+            case 7:
+              ctx.fillStyle = '#f5fafe'; // Very light tone
+              break;
+          }
+          
           ctx.fillRect(px, py, this.tileSize, this.tileSize);
           
-          // Add floor grid pattern
-          ctx.strokeStyle = 'rgba(180, 190, 200, 0.3)';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(px, py, this.tileSize, this.tileSize);
+          // Add subtle texture variation instead of grid lines
+          if (this.tileSize >= 40 && floorVariant % 3 === 0) {
+            // Add very subtle tile patterns on some floor tiles
+            ctx.fillStyle = 'rgba(200, 210, 220, 0.15)';
+            ctx.fillRect(px + 2, py + 2, this.tileSize - 4, this.tileSize - 4);
+          }
+          
+          // Add occasional floor details
+          if (floorVariant === 1 && this.tileSize >= 40) {
+            // Small floor vent
+            ctx.fillStyle = 'rgba(160, 170, 180, 0.4)';
+            ctx.fillRect(px + 6, py + 6, this.tileSize - 12, 4);
+          } else if (floorVariant === 4 && this.tileSize >= 40) {
+            // Floor junction marks
+            ctx.fillStyle = 'rgba(140, 150, 160, 0.3)';
+            ctx.fillRect(px, py + this.tileSize/2 - 1, this.tileSize, 2);
+            ctx.fillRect(px + this.tileSize/2 - 1, py, 2, this.tileSize);
+          }
         }
       }
     }
