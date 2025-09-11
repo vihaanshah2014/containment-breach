@@ -15,18 +15,19 @@ export class Enemy {
   private stuckTime: number = 0;
   private sideBias: number = Math.random() < 0.5 ? 1 : -1;
 
-  // Walking animation state
+  // Animation state
   private walkAnimTime: number = 0;
   private isMoving: boolean = false;
   private footstepTimer: number = 0;
-  private lastPosition: Vector2;
+  private idleAnimTime: number = 0;
+  private shootFlashTime: number = 0;
+  private damageFlashTime: number = 0;
 
   private static nextId = 1;
 
   constructor(x: number, y: number, weaponChance: number = 0.6, shieldHits: number = 0) {
     this.id = Enemy.nextId++;
     this.position = new Vector2(x, y);
-    this.lastPosition = new Vector2(x, y);
     this.speed = 80 + Math.random() * 40; // Random speed between 80-120
     this.shield = shieldHits;
     this.maxShield = shieldHits;
@@ -76,6 +77,7 @@ export class Enemy {
         
         this.weapon.fire();
         this.shootCooldown = this.weapon.fireRate + Math.random() * 500; // Add some randomness
+        this.shootFlashTime = 150; // 150ms shoot flash
         
         // If out of ammo, throw weapon
         if (!this.weapon.canFire() && this.weapon.isThrowable) {
@@ -95,7 +97,7 @@ export class Enemy {
       this.position = target;
     }
     
-    // Update walking animation state
+    // Update animation states
     const moved = this.position.distanceTo(oldPos) > 0.5;
     this.isMoving = moved;
     if (this.isMoving) {
@@ -104,8 +106,16 @@ export class Enemy {
     } else {
       this.walkAnimTime = 0;
       this.footstepTimer = 0;
+      this.idleAnimTime += deltaTime;
     }
-    this.lastPosition = new Vector2(this.position.x, this.position.y);
+
+    // Update animation timers
+    if (this.shootFlashTime > 0) {
+      this.shootFlashTime -= deltaTime;
+    }
+    if (this.damageFlashTime > 0) {
+      this.damageFlashTime -= deltaTime;
+    }
     
     return result;
   }
@@ -116,17 +126,38 @@ export class Enemy {
     const dir = playerPosition.subtract(this.position).normalize();
     const angle = Math.atan2(dir.y, dir.x);
     
-    // Walking bob animation
+    // Animation offsets
     let bobOffset = 0;
+    let recoilOffset = 0;
+    
     if (this.isMoving) {
+      // Walking bob animation
       bobOffset = Math.sin(this.walkAnimTime * 0.008) * 1.5; // Slightly slower and smaller bob than player
+    } else {
+      // Idle breathing animation
+      bobOffset = Math.sin(this.idleAnimTime * 0.002) * 0.6; // Even more subtle than player
+    }
+
+    // Shooting recoil animation
+    if (this.shootFlashTime > 0) {
+      const recoilT = this.shootFlashTime / 150;
+      recoilOffset = Math.sin(recoilT * Math.PI) * 2.5; // Slightly less recoil than player
     }
     
+    ctx.save();
+    
+    // Damage flash effect
+    if (this.damageFlashTime > 0) {
+      const flashAlpha = (this.damageFlashTime / 200) * 0.5;
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = flashAlpha;
+    }
+
     if (this.sprite) {
       const drawW = 42;
       const drawH = 42;
       ctx.save();
-      ctx.translate(x, y + bobOffset);
+      ctx.translate(x - recoilOffset * Math.cos(angle), y + bobOffset - recoilOffset * Math.sin(angle));
       // Rotate sprite 90° counterclockwise to align facing
       ctx.rotate(angle - Math.PI / 2);
       ctx.drawImage(
@@ -144,16 +175,18 @@ export class Enemy {
     } else {
       // Fallback hazmat ellipse
       ctx.save();
-      ctx.fillStyle = '#ffd54d'; // hazmat yellow
+      ctx.fillStyle = this.damageFlashTime > 0 ? '#ffdd77' : '#ffd54d'; // hazmat yellow
       ctx.beginPath();
-      ctx.ellipse(x, y + bobOffset, 11, 14, 0, 0, Math.PI * 2);
+      ctx.ellipse(x - recoilOffset * Math.cos(angle), y + bobOffset - recoilOffset * Math.sin(angle), 11, 14, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.translate(x, y + bobOffset);
+      ctx.translate(x - recoilOffset * Math.cos(angle), y + bobOffset - recoilOffset * Math.sin(angle));
       ctx.rotate(angle - Math.PI / 2);
       ctx.fillStyle = '#111827';
       ctx.fillRect(4, -4, 7, 8);
       ctx.restore();
     }
+    
+    ctx.restore();
 
     // Shield visual
     if (this.shield > 0) {
@@ -166,12 +199,36 @@ export class Enemy {
 
     // Removed red outline accent for cleaner look
 
-    // Draw weapon if enemy has one
+    // Draw weapon with muzzle flash
     if (this.weapon) {
       const direction = playerPosition.subtract(this.position).normalize();
       const angle = Math.atan2(direction.y, direction.x);
-      const weaponPos = this.position.add(direction.multiply(15));
+      const weaponPos = this.position.add(direction.multiply(15 - recoilOffset));
       this.weapon.render(ctx, weaponPos, angle);
+      
+      // Muzzle flash effect
+      if (this.shootFlashTime > 0) {
+        const flashSize = 10 + Math.random() * 6;
+        const flashDistance = 20 - recoilOffset;
+        const flashPos = this.position.add(direction.multiply(flashDistance));
+        
+        ctx.save();
+        ctx.globalAlpha = (this.shootFlashTime / 150) * 0.7;
+        ctx.globalCompositeOperation = 'lighter';
+        
+        // Random muzzle flash shape
+        const gradient = ctx.createRadialGradient(flashPos.x, flashPos.y, 0, flashPos.x, flashPos.y, flashSize);
+        gradient.addColorStop(0, '#ffffff');
+        gradient.addColorStop(0.3, '#ffff88');
+        gradient.addColorStop(0.6, '#ff8800');
+        gradient.addColorStop(1, '#ff440000');
+        
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(flashPos.x, flashPos.y, flashSize, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
     }
   }
 

@@ -500,6 +500,13 @@ export class TileMap {
 
   getBreakableObjects(): ReadonlyArray<BreakableObject> { return this.breakableObjects; }
 
+  // Get a random table for item spawning
+  getRandomTable(): BreakableObject | null {
+    const tables = this.breakableObjects.filter(obj => obj.type === 'table');
+    if (tables.length === 0) return null;
+    return tables[Math.floor(Math.random() * tables.length)];
+  }
+
   // Check if a bullet hits any breakable objects
   checkObjectHit(px: number, py: number): { hit: boolean; object?: BreakableObject; damage?: number } {
     for (const obj of this.breakableObjects) {

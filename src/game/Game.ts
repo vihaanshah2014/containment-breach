@@ -259,6 +259,25 @@ export class Game {
           ));
         }
         
+        // If a table was destroyed, spawn an item!
+        if (result.destroyed && result.object?.type === 'table') {
+          const shouldSpawnWeapon = Math.random() < 0.7; // 70% chance for weapon, 30% for shield
+          if (shouldSpawnWeapon) {
+            const weaponTypes = [WeaponType.PISTOL, WeaponType.RIFLE, WeaponType.SHOTGUN, WeaponType.KATANA, WeaponType.SHURIKEN];
+            const randomType = weaponTypes[Math.floor(Math.random() * weaponTypes.length)];
+            this.weaponPickups.push(new WeaponPickup(
+              result.object.x + result.object.width / 2,
+              result.object.y + result.object.height / 2,
+              randomType
+            ));
+          } else {
+            this.shieldPickups.push(new ShieldPickup(
+              result.object.x + result.object.width / 2,
+              result.object.y + result.object.height / 2
+            ));
+          }
+        }
+        
         return false; // Remove bullet
       }
       
@@ -616,7 +635,16 @@ export class Game {
     const weaponTypes = [WeaponType.PISTOL, WeaponType.RIFLE, WeaponType.SHOTGUN, WeaponType.KATANA, WeaponType.SHURIKEN];
     const randomType = weaponTypes[Math.floor(Math.random() * weaponTypes.length)];
     
-    // Spawn near a random door tile (white doorway)
+    // Try to spawn on a table first
+    const table = this.map.getRandomTable();
+    if (table) {
+      const x = table.x + table.width / 2;
+      const y = table.y + table.height / 2;
+      this.weaponPickups.push(new WeaponPickup(x, y, randomType));
+      return;
+    }
+    
+    // Fallback: spawn near a random door tile
     const doorTile = this.map.getRandomDoorTile();
     let x = this.map.getPixelWidth() / 2;
     let y = this.map.getPixelHeight() / 2;
@@ -638,7 +666,16 @@ export class Game {
   }
 
   private spawnShieldPickup() {
-    // Spawn near a random door tile (white doorway)
+    // Try to spawn on a table first
+    const table = this.map.getRandomTable();
+    if (table) {
+      const x = table.x + table.width / 2;
+      const y = table.y + table.height / 2;
+      this.shieldPickups.push(new ShieldPickup(x, y));
+      return;
+    }
+    
+    // Fallback: spawn near a random door tile
     const doorTile = this.map.getRandomDoorTile();
     let x = this.map.getPixelWidth() / 2;
     let y = this.map.getPixelHeight() / 2;
@@ -685,6 +722,7 @@ export class Game {
           // Bullet impacts shield first
           if (enemy.shield > 0) {
             enemy.shield = Math.max(0, enemy.shield - 1);
+            (enemy as any).damageFlashTime = 150; // Add damage flash to enemy
             // Shield hit sparkle
             for (let k = 0; k < 4; k++) {
               this.particles.push(new Particle(
@@ -707,6 +745,7 @@ export class Game {
           // Bullet impacts shield first
           if (enemy.shield > 0) {
             enemy.shield = Math.max(0, enemy.shield - 1);
+            (enemy as any).damageFlashTime = 150; // Add damage flash to enemy
             this.bullets.splice(i, 1);
             if (!bullet.isEnemyBullet) {
               this.onHudUpdate?.();
