@@ -3,6 +3,7 @@ import { Enemy } from './Enemy';
 import { Bullet } from './Bullet';
 import { Vector2 } from './Vector2';
 import { Particle } from './Particle';
+import { Footstep } from './Footstep';
 import { WeaponPickup } from './WeaponPickup';
 import { ShieldPickup } from './ShieldPickup';
 import { ThrownWeapon } from './ThrownWeapon';
@@ -16,6 +17,7 @@ export class Game {
   private enemies: Enemy[] = [];
   private bullets: Bullet[] = [];
   private particles: Particle[] = [];
+  private footsteps: Footstep[] = [];
   private weaponPickups: WeaponPickup[] = [];
   private thrownWeapons: ThrownWeapon[] = [];
   private shieldPickups: ShieldPickup[] = [];
@@ -83,8 +85,8 @@ export class Game {
     this.enemySprites = sets.enemies;
     this.unlockableSprites = sets.unlockable;
     if (this.playableSprites.length) {
-      const __idx = Math.floor(Math.random() * this.playableSprites.length);
-      (this.player as any).sprite = this.playableSprites[__idx];
+      // Start with skin 1 (index 0) instead of random
+      (this.player as any).sprite = this.playableSprites[0];
     }
   }
 
@@ -107,17 +109,14 @@ export class Game {
     const worldH = Math.max(1200, Math.floor(height * 2.5));
     this.map = new TileMap(worldW, worldH);
     
-    // Spawn player on a door tile (the ones with white tech dots)
-    let px = worldW / 2;
-    let py = worldH / 2;
+    // Spawn player on a door tile (ALWAYS, no fallbacks!)
     const doorTile = this.map.getRandomDoorTile();
-    if (doorTile) {
-      const c = this.map.tileCenter(doorTile.tx, doorTile.ty);
-      px = c.x; 
-      py = c.y;
+    if (!doorTile) {
+      throw new Error('CRITICAL: No door tiles available for player spawn!');
     }
+    const spawnPos = this.map.tileCenter(doorTile.tx, doorTile.ty);
     
-    this.player = new Player(px, py);
+    this.player = new Player(spawnPos.x, spawnPos.y);
   }
 
   resize(width: number, height: number) {
@@ -414,6 +413,26 @@ export class Game {
     this.particles = this.particles.filter(particle => {
       particle.update(scaledDeltaTime);
       return particle.life > 0;
+    });
+
+    // Generate footstep particles from player
+    const playerFootsteps = this.player.getFootstepParticles();
+    playerFootsteps.forEach(fp => {
+      this.footsteps.push(new Footstep(fp.x, fp.y));
+    });
+
+    // Generate footstep particles from enemies
+    this.enemies.forEach(enemy => {
+      const enemyFootsteps = enemy.getFootstepParticles();
+      enemyFootsteps.forEach(fp => {
+        this.footsteps.push(new Footstep(fp.x, fp.y));
+      });
+    });
+
+    // Update footstep particles
+    this.footsteps = this.footsteps.filter(footstep => {
+      footstep.update(scaledDeltaTime);
+      return !footstep.isDead();
     });
 
     // Spawn enemies based on wave system
@@ -949,6 +968,9 @@ export class Game {
     // Render lab map
     this.map.render(ctx);
 
+    // Render footstep particles (behind everything else)
+    this.footsteps.forEach(footstep => footstep.render(ctx));
+
     // Render particles
     this.particles.forEach(particle => particle.render(ctx));
 
@@ -1000,21 +1022,23 @@ export class Game {
   }
 
   reset() {
-    // Spawn player on a door tile (the ones with white tech dots)
-    let px = this.map.getPixelWidth() / 2;
-    let py = this.map.getPixelHeight() / 2;
-    
+    // Spawn player on a door tile (ALWAYS, no fallbacks!)
     const doorTile = this.map.getRandomDoorTile();
-    if (doorTile) {
-      const c = this.map.tileCenter(doorTile.tx, doorTile.ty);
-      px = c.x; 
-      py = c.y;
+    if (!doorTile) {
+      throw new Error('CRITICAL: No door tiles available for player spawn in reset!');
     }
+    const spawnPos = this.map.tileCenter(doorTile.tx, doorTile.ty);
     
-    this.player = new Player(px, py);
+    this.player = new Player(spawnPos.x, spawnPos.y);
+    
+    // Re-assign sprite if we have sprites loaded
+    if (this.playableSprites.length > 0) {
+      (this.player as any).sprite = this.playableSprites[0];
+    }
     this.enemies = [];
     this.bullets = [];
     this.particles = [];
+    this.footsteps = [];
     this.weaponPickups = [];
     this.shieldPickups = [];
     this.thrownWeapons = [];

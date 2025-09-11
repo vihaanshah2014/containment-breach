@@ -460,11 +460,19 @@ export class TileMap {
     
     if (candidates.length === 0) {
       console.error('ERROR: No door tiles found! Map generation failed!');
-      // Force create at least one door tile as emergency fallback
-      const emergencyX = Math.floor(this.cols / 2);
-      const emergencyY = Math.floor(this.rows / 2);
-      this.set(emergencyX, emergencyY, 'door');
-      return { tx: emergencyX, ty: emergencyY };
+      // Force create multiple door tiles to guarantee spawn areas
+      const emergencyPositions = [
+        { x: Math.floor(this.cols / 4), y: Math.floor(this.rows / 4) },
+        { x: Math.floor(this.cols * 3 / 4), y: Math.floor(this.rows / 4) },
+        { x: Math.floor(this.cols / 2), y: Math.floor(this.rows / 2) },
+        { x: Math.floor(this.cols / 4), y: Math.floor(this.rows * 3 / 4) },
+        { x: Math.floor(this.cols * 3 / 4), y: Math.floor(this.rows * 3 / 4) }
+      ];
+      
+      for (const pos of emergencyPositions) {
+        this.set(pos.x, pos.y, 'door');
+        candidates.push({ tx: pos.x, ty: pos.y });
+      }
     }
     
     return candidates[Math.floor(Math.random() * candidates.length)];

@@ -57,8 +57,12 @@ const GameCanvas: React.FC = () => {
 
     // Load character sprites from src/assets/characters.png
     loadCharacterSpriteSets(charactersUrl)
-      .then(sets => game.setCharacterSprites(sets))
-      .catch(() => {/* optional asset */});
+      .then(sets => {
+        game.setCharacterSprites(sets);
+      })
+      .catch(error => {
+        console.error('Failed to load character sprites:', error);
+      });
 
     // Input handlers
     const keys = new Set<string>();

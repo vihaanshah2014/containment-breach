@@ -11,6 +11,11 @@ export class Player {
   private shootCooldown: number = 0;
   private punchCooldown: number = 0;
   public sprite?: SpriteFrame;
+  
+  // Walking animation state
+  private walkAnimTime: number = 0;
+  private isMoving: boolean = false;
+  private footstepTimer: number = 0;
 
   constructor(x: number, y: number) {
     this.position = new Vector2(x, y);
@@ -20,7 +25,7 @@ export class Player {
   update(
     deltaTime: number,
     keys: Set<string>,
-    mouse: { x: number; y: number },
+    _mouse: { x: number; y: number },
     width: number,
     height: number,
     collider?: (from: Vector2, to: Vector2, radius: number) => Vector2
@@ -38,12 +43,24 @@ export class Player {
     if (movement.length() > 0) {
       movement.normalize();
       const target = this.position.add(movement.multiply(speed * (deltaTime / 1000)));
+      const oldPos = new Vector2(this.position.x, this.position.y);
       if (collider) {
         this.position = collider(this.position, target, 15);
       } else {
         this.position = target;
       }
-      moved = true;
+      // Check if actually moved (not stuck against wall)
+      moved = this.position.distanceTo(oldPos) > 0.5;
+    }
+
+    // Update walking animation state
+    this.isMoving = moved;
+    if (this.isMoving) {
+      this.walkAnimTime += deltaTime;
+      this.footstepTimer += deltaTime;
+    } else {
+      this.walkAnimTime = 0;
+      this.footstepTimer = 0;
     }
 
     // Keep player in bounds
@@ -69,7 +86,7 @@ export class Player {
   }
 
   canShoot(): boolean {
-    return this.shootCooldown <= 0 && this.weapon && this.weapon.canFire();
+    return this.shootCooldown <= 0 && this.weapon !== null && this.weapon.canFire();
   }
 
   canPunch(): boolean {
@@ -86,7 +103,7 @@ export class Player {
     this.punchCooldown = 600; // 600ms cooldown for punching
   }
   canMelee(): boolean {
-    return this.shootCooldown <= 0 && this.weapon && this.weapon.type === WeaponType.KATANA;
+    return this.shootCooldown <= 0 && this.weapon !== null && this.weapon.type === WeaponType.KATANA;
   }
 
   melee() {
@@ -120,17 +137,37 @@ export class Player {
     this.shield = Math.min(100, this.shield + amount);
   }
 
+  // Get footstep particles if moving
+  getFootstepParticles(): Array<{x: number, y: number, age: number}> {
+    const particles: Array<{x: number, y: number, age: number}> = [];
+    if (this.isMoving && this.footstepTimer >= 300) { // Every 300ms
+      particles.push({
+        x: this.position.x + (Math.random() - 0.5) * 8,
+        y: this.position.y + (Math.random() - 0.5) * 8,
+        age: 0
+      });
+      this.footstepTimer = 0;
+    }
+    return particles;
+  }
+
   render(ctx: CanvasRenderingContext2D, mousePos: Vector2) {
     const x = this.position.x;
     const y = this.position.y;
     const dir = mousePos.subtract(this.position).normalize();
     const angle = Math.atan2(dir.y, dir.x);
     
+    // Walking bob animation
+    let bobOffset = 0;
+    if (this.isMoving) {
+      bobOffset = Math.sin(this.walkAnimTime * 0.01) * 2; // Subtle 2px bob
+    }
+    
     if (this.sprite) {
       const drawW = 44;
       const drawH = 44;
       ctx.save();
-      ctx.translate(x, y);
+      ctx.translate(x, y + bobOffset);
       // Rotate sprite 90° counterclockwise so its facing aligns with weapon
       ctx.rotate(angle - Math.PI / 2);
       ctx.drawImage(
@@ -150,9 +187,9 @@ export class Player {
       ctx.save();
       ctx.fillStyle = '#ff4d4d';
       ctx.beginPath();
-      ctx.ellipse(x, y, 12, 16, 0, 0, Math.PI * 2);
+      ctx.ellipse(x, y + bobOffset, 12, 16, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.translate(x, y);
+      ctx.translate(x, y + bobOffset);
       ctx.rotate(angle - Math.PI / 2);
       ctx.fillStyle = '#111827';
       ctx.fillRect(4, -5, 8, 10);

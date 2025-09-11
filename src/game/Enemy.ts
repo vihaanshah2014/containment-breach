@@ -15,11 +15,18 @@ export class Enemy {
   private stuckTime: number = 0;
   private sideBias: number = Math.random() < 0.5 ? 1 : -1;
 
+  // Walking animation state
+  private walkAnimTime: number = 0;
+  private isMoving: boolean = false;
+  private footstepTimer: number = 0;
+  private lastPosition: Vector2;
+
   private static nextId = 1;
 
   constructor(x: number, y: number, weaponChance: number = 0.6, shieldHits: number = 0) {
     this.id = Enemy.nextId++;
     this.position = new Vector2(x, y);
+    this.lastPosition = new Vector2(x, y);
     this.speed = 80 + Math.random() * 40; // Random speed between 80-120
     this.shield = shieldHits;
     this.maxShield = shieldHits;
@@ -81,11 +88,24 @@ export class Enemy {
     // Move toward player (slower if shooting)
     const moveSpeed = this.weapon && distanceToPlayer < this.weapon.range ? this.speed * 0.3 : this.speed;
     const target = this.position.add(direction.multiply(moveSpeed * (deltaTime / 1000)));
+    const oldPos = new Vector2(this.position.x, this.position.y);
     if (collider) {
       this.position = collider(this.position, target, 12);
     } else {
       this.position = target;
     }
+    
+    // Update walking animation state
+    const moved = this.position.distanceTo(oldPos) > 0.5;
+    this.isMoving = moved;
+    if (this.isMoving) {
+      this.walkAnimTime += deltaTime;
+      this.footstepTimer += deltaTime;
+    } else {
+      this.walkAnimTime = 0;
+      this.footstepTimer = 0;
+    }
+    this.lastPosition = new Vector2(this.position.x, this.position.y);
     
     return result;
   }
@@ -95,11 +115,18 @@ export class Enemy {
     const y = this.position.y;
     const dir = playerPosition.subtract(this.position).normalize();
     const angle = Math.atan2(dir.y, dir.x);
+    
+    // Walking bob animation
+    let bobOffset = 0;
+    if (this.isMoving) {
+      bobOffset = Math.sin(this.walkAnimTime * 0.008) * 1.5; // Slightly slower and smaller bob than player
+    }
+    
     if (this.sprite) {
       const drawW = 42;
       const drawH = 42;
       ctx.save();
-      ctx.translate(x, y);
+      ctx.translate(x, y + bobOffset);
       // Rotate sprite 90° counterclockwise to align facing
       ctx.rotate(angle - Math.PI / 2);
       ctx.drawImage(
@@ -119,9 +146,9 @@ export class Enemy {
       ctx.save();
       ctx.fillStyle = '#ffd54d'; // hazmat yellow
       ctx.beginPath();
-      ctx.ellipse(x, y, 11, 14, 0, 0, Math.PI * 2);
+      ctx.ellipse(x, y + bobOffset, 11, 14, 0, 0, Math.PI * 2);
       ctx.fill();
-      ctx.translate(x, y);
+      ctx.translate(x, y + bobOffset);
       ctx.rotate(angle - Math.PI / 2);
       ctx.fillStyle = '#111827';
       ctx.fillRect(4, -4, 7, 8);
@@ -146,5 +173,19 @@ export class Enemy {
       const weaponPos = this.position.add(direction.multiply(15));
       this.weapon.render(ctx, weaponPos, angle);
     }
+  }
+
+  // Get footstep particles if moving
+  getFootstepParticles(): Array<{x: number, y: number, age: number}> {
+    const particles: Array<{x: number, y: number, age: number}> = [];
+    if (this.isMoving && this.footstepTimer >= 350) { // Slightly slower than player
+      particles.push({
+        x: this.position.x + (Math.random() - 0.5) * 6,
+        y: this.position.y + (Math.random() - 0.5) * 6,
+        age: 0
+      });
+      this.footstepTimer = 0;
+    }
+    return particles;
   }
 }
